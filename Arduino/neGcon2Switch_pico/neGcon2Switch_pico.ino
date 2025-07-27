@@ -18,6 +18,9 @@
 //                  Change LED Pattern standard PSX Controller
 //                  Adjust I/II button value (x1.1)
 //  25/07/13 V1.3   Support maximum tilt setting(neGcon/Analog Stick).
+//  25/07/27 V1.4   Fixed bug not working DUALSHOCK/2 AnalogStick.
+//                  Fixed bug missing position JOGCON
+//                  Support JOGCON Forceback
 //
 //
 // This program requires same librarys
@@ -57,6 +60,8 @@
 #define EEPADR_NEGMODE 3
 #define EEPADR_NEG_NEGMAX 4
 #define EEPADR_ANALOG_STICKMAX 5
+#define EEPADR_JOG_MAX_U 6
+#define EEPADR_JOG_MAX_L 7
 
 // neGcon ハンドルアナログ値の補正
 // これ以上の補正が必要な場合は、設定→ボタン→こだわりのボタン設定→感度設定を弄ってください。
@@ -65,6 +70,11 @@
 // neGcon ボタン アナログ値の補正
 // これ以上の補正が必要な場合は、設定→ボタン→こだわりのボタン設定→感度設定を弄ってください。
 #define NEG_CALIB_B 1.1
+
+// jogconの境界線補正値
+// これを超えるとForcebackが入る、ただし強さが2になるまで人間では分からん
+#define JOG_MAX_AJST -4
+
 
 //NeoPixelの設定
 #define NUMPIXELS 1
@@ -189,7 +199,7 @@ byte ledLx, ledLy, ledRx, ledRy, ledB1, ledB2, ledBL;
 byte stickMode;
 byte lxMax;
 byte analogLxMax;
-
+short jogconDialMax;
 
 // EEPROMのClear関数
 void eepromFormat() {
@@ -198,19 +208,21 @@ void eepromFormat() {
     EEPROM.write(i, 0);
   }
   EEPROM.write(0, 'c');
-  EEPROM.write(1, 'n');
-  EEPROM.write(2, 'f');
+  EEPROM.write(1, 'f');
+  EEPROM.write(2, '1');
   EEPROM.write(EEPADR_NEGMODE, MODE_STD);
   EEPROM.write(EEPADR_NEG_NEGMAX, 255 / ((NEG_CALIB - 1) / 2 + 1));
   EEPROM.write(EEPADR_ANALOG_STICKMAX, 255);
+  EEPROM.write(EEPADR_JOG_MAX_U, 0);
+  EEPROM.write(EEPADR_JOG_MAX_L, 100);
   EEPROM.commit();
 }
 
 // EEPROM領域の確認
 bool eepromCheck() {
   if (EEPROM.read(0) != 'c') return false;
-  if (EEPROM.read(1) != 'n') return false;
-  if (EEPROM.read(2) != 'f') return false;
+  if (EEPROM.read(1) != 'f') return false;
+  if (EEPROM.read(2) != '1') return false;
   return true;
 }
 
@@ -222,6 +234,25 @@ byte restoreNegDegMax() {
   // 有効値Check
   if (tmp < 0x80) {
     tmp = 255 / ((NEG_CALIB - 1) / 2 + 1);
+    Serial.println(F("EEP Write!"));
+    EEPROM.write(EEPADR_NEG_NEGMAX, tmp);
+    EEPROM.commit();
+  }
+
+  return tmp;
+}
+
+// JOGCONひねり値の最大値の復帰
+short restorejogMax() {
+  short tmp;
+  tmp = (short)EEPROM.read(EEPADR_JOG_MAX_U);
+  tmp = (tmp << 8) | (short)EEPROM.read(EEPADR_JOG_MAX_L);
+
+  // 有効値Check
+  if (tmp < 0x10) {
+    tmp = 100;
+    EEPROM.write(EEPADR_JOG_MAX_U, 0);
+    EEPROM.write(EEPADR_JOG_MAX_L, 100);
     Serial.println(F("EEP Write!"));
     EEPROM.write(EEPADR_NEG_NEGMAX, tmp);
     EEPROM.commit();
@@ -279,7 +310,10 @@ int absoluteXY(byte lx) {
   else lx_tmp = (int)lx;
   return lx_tmp;
 }
-
+// short型絶対値計算関数
+short jogcon_abs_val(short x) {
+  return x < 0 ? -x : x;
+}
 // 補正値計算
 int adjustXY(byte lx, byte max) {
   int lx_tmp;
@@ -294,6 +328,60 @@ int adjustXY(byte lx, byte max) {
     lx_tmp = 0x80 - lx_tmp;
   }
   return lx_tmp;
+}
+// プレステコントローラ向けの標準キー配置の変換処理
+void keyConvert_psx2switch() {
+  // hat_switch（これは共通処理)
+  t_joystickInputData.Hat = (uint8_t)(hatValue[(psx.getButtonWord() & 0x00f0) >> 4]);
+
+  // buttonSelect = Button::MINUS
+  if (psx.getButtonWord() & PSB_SELECT)
+    t_joystickInputData.Button |= (uint16_t)(Button::MINUS);
+
+  // buttonL3 = Button::LCLICK
+  if (psx.getButtonWord() & PSB_L3)
+    t_joystickInputData.Button |= (uint16_t)(Button::LCLICK);
+
+  // buttonR3 = Button::RCLICK
+  if (psx.getButtonWord() & PSB_R3)
+    t_joystickInputData.Button |= (uint16_t)(Button::RCLICK);
+
+  // buttonStart = Button::PLUS
+  if (psx.getButtonWord() & PSB_START)
+    t_joystickInputData.Button |= (uint16_t)(Button::PLUS);
+
+
+  // buttonL2 = Button::ZL
+  if (psx.getButtonWord() & PSB_L2)
+    t_joystickInputData.Button |= (uint16_t)(Button::ZL);
+
+  // buttonR2 = Button::ZR
+  if (psx.getButtonWord() & PSB_R2)
+    t_joystickInputData.Button |= (uint16_t)(Button::ZR);
+
+  // buttonR1 = Button::R
+  if (psx.getButtonWord() & PSB_R1)
+    t_joystickInputData.Button |= (uint16_t)(Button::R);
+
+  // buttonTriangle = Button::X
+  if (psx.getButtonWord() & PSB_TRIANGLE)
+    t_joystickInputData.Button |= (uint16_t)(Button::X);
+
+  // buttonCircle = Button::A
+  if (psx.getButtonWord() & PSB_CIRCLE)
+    t_joystickInputData.Button |= (uint16_t)(Button::A);
+
+  // buttonL1 = Button::L
+  if (psx.getButtonWord() & PSB_L1)
+    t_joystickInputData.Button |= (uint16_t)(Button::L);
+
+  // buttonCross = Button::B
+  if (psx.getButtonWord() & PSB_CROSS)
+    t_joystickInputData.Button |= (uint16_t)(Button::B);
+
+  // buttonSquare = Button::Y
+  if (psx.getButtonWord() & PSB_SQUARE)
+    t_joystickInputData.Button |= (uint16_t)(Button::Y);
 }
 
 
@@ -341,7 +429,7 @@ void loop1() {  //core 0
 
       // フライトコントローラ接続時の点灯パターン
     case MODE_AIRCON22:
-      pixels.setPixelColor(0, pixels.Color(ledRy / 4, ledLx / 8, ledRy / 8 + 0x40));
+      pixels.setPixelColor(0, pixels.Color(ledRy / 4, ledLx / 8, ledLy / 8 + 0x40));
       pixels.show();
       break;
 
@@ -418,6 +506,7 @@ void setup() {
 
   lxMax = restoreNegDegMax();
   analogLxMax = restoreAnaDegMax();
+  jogconDialMax = restorejogMax();
   stickMode = MODE_LOST;
   delay(300);
 
@@ -436,12 +525,17 @@ void loop() {
   static bool changeNegStickMode;
   static byte slx, sly, sb1, sb2, sbL;
   static byte srx, sry;
+  static short sjogx;
+  static byte jogxForcePower = 0;
+  static byte jogxPosResetEnable;
 
   byte l_x, l_y, l_b1, l_b2, l_bL;
   byte lx_org, ly_org, b1_org, b2_org, bL_org;
   byte rx_org, ry_org;
   byte r_x, r_y;
   int l_x_tmp, xy_tmp;
+  short jogx;
+
 
 
   static PsxControllerType psxContType;
@@ -554,6 +648,16 @@ void loop() {
       OldpsxStickMode = PSPROTO_UNKNOWN;
       stickMode = MODE_LOST;
 
+      //以前のデータをClearしておく
+      t_joystickInputData.LX = 0x80;
+      t_joystickInputData.LY = 0x80;
+      t_joystickInputData.RX = 0x80;
+      t_joystickInputData.RY = 0x80;
+      t_joystickInputData.Hat = (uint8_t)Hat::CENTER;
+      t_joystickInputData.Button = 0;
+      SwitchController().sendReportOnly(t_joystickInputData);  // USBジョイスティック データ送信
+
+
     } else {
       digitalWrite(PIN_GOODLED, LOW);  //Controller認識OK
       // PWM mode用LOOP回数処理
@@ -568,7 +672,18 @@ void loop() {
         if (psxStickMode == PSPROTO_FLIGHTSTICK) stickMode = MODE_AIRCON22;
         if ((psxStickMode == PSPROTO_DUALSHOCK) || (psxStickMode == PSPROTO_DUALSHOCK2)) stickMode = MODE_ANALOG;
         if ((psxStickMode == PSPROTO_NEGCON) || (psxStickMode == PSPROTO_JOGCON)) stickMode = restoreNegStickMode();
-
+        if (psxStickMode == PSPROTO_JOGCON) {
+          delay(300);
+          if (psx.enterConfigMode()) {
+            Serial.println(F("Set Jogcon Rumble"));
+            if (!psx.enableJogconRumble()) {
+              Serial.println(F("Cannot enable Jogcon Rumble"));
+            }
+            if (!psx.exitConfigMode()) {
+              Serial.println(F("Cannot exit config mode"));
+            }
+          }
+        }
         Serial.print(F("Controller Protocol is: "));
         Serial.println(controllerProtoStrings[psxStickMode < PSPROTO_MAX ? static_cast<byte>(psxStickMode) : PSPROTO_MAX]);
       }
@@ -721,9 +836,8 @@ void loop() {
           break;
 
 
-        // NeGcon/joGconのボタン配置処理(リッジレーサモード)
+        // NeGconのボタン配置処理(リッジレーサモード)
         case PSPROTO_NEGCON:
-        case PSPROTO_JOGCON:
           // hat_switch（これは共通処理)
           t_joystickInputData.Hat = (uint8_t)(hatValue[(psx.getButtonWord() & 0x00f0) >> 4]);
 
@@ -885,6 +999,178 @@ void loop() {
 
           break;
 
+        case PSPROTO_JOGCON:
+          // PSXデジタルキー入力変換処理
+          keyConvert_psx2switch();
+
+          // ジョグコンアナログ値取得
+          if (psx.getJogConAnalog(jogx)) {
+            // MAX値を超えた場合のForceback処理
+            jogxForcePower = 0;  // 初期値はForce無し
+            if (stickMode != MODE_SETTING_NEG) {
+              if (jogcon_abs_val(jogx) > jogconDialMax + JOG_MAX_AJST) {  // -4はアソビ
+                jogxForcePower = (jogcon_abs_val(jogx) - (jogconDialMax + JOG_MAX_AJST)) / 2;
+                if (jogxForcePower > 0x0f) jogxForcePower = 0x0f;
+              }
+              if (jogxForcePower == 0) {
+                psx.setJogCommand(0x00);  //wheel stop
+              } else {
+                if (jogx < 0)                                       //マイナス方向の計算(左）
+                  psx.setJogCommand(0x10 | jogxForcePower & 0x0f);  //wheel right
+                else
+                  psx.setJogCommand(0x20 | (jogxForcePower & 0x0f));  //wheel left
+              }
+            }
+
+
+            // ホイール値からX値を計算する
+            l_x = 0x80 + (byte)(0x80 * jogx / jogconDialMax);
+            if (jogcon_abs_val(jogx) >= jogconDialMax) l_x = (jogx < 0) ? 0x00 : 0xff;  //MAX設定値越え
+
+
+            // ボタンのアナログ処理
+            b1_org = 0x00;
+            b2_org = 0x00;
+
+            if ((stickMode == MODE_STDSWAP) || (stickMode == MODE_DXSWAP)) {
+              // I/II button SWAP mode
+              if (psx.getButtonWord() & PSB_CROSS) b2_org = 0xff;
+              if (psx.getButtonWord() & PSB_SQUARE) b1_org = 0xff;
+            } else {
+              // I/II button NORMAL mode
+              if (psx.getButtonWord() & PSB_CROSS) b1_org = 0xff;
+              if (psx.getButtonWord() & PSB_SQUARE) b2_org = 0xff;
+            }
+
+            l_b1 = b1_org / 2;
+            l_b2 = b2_org / 2;
+
+            // 値の更新がある場合は更新処理を実施する
+            if (l_x != slx || l_b1 != sb1 || l_b2 != sb2 || l_bL != sbL) {
+              slx = l_x;
+              sb1 = l_b1;
+              sb2 = l_b2;
+              sbL = l_bL;
+
+
+#ifdef SERIALVAL_OUT
+              Serial.print(F("DEBUG : X(ORG): "));
+              Serial.print(l_x);
+              Serial.print(F(" JOGX: "));
+              Serial.print(jogx);
+              Serial.print(F(" JOGX(MAX): "));
+              Serial.print(jogconDialMax);
+              Serial.print(F(" POWER: "));
+              Serial.print(jogxForcePower);
+              Serial.print(F(" B1: "));
+              Serial.print(b1_org);
+              Serial.print(F(" B2: "));
+              Serial.print(b2_org);
+              Serial.print(F(" BL: "));
+              Serial.println(bL_org);
+#endif
+
+              //LEDへの値渡し
+              ledLx = l_x;
+              ledB1 = 0x00;
+              ledB2 = b2_org;
+              ledBL = bL_org;
+
+              // 最終的な値をセット (ハンドル)
+              if (stickMode == MODE_NEGDIGTAL) {
+                t_joystickInputData.LX = (uint8_t)(0x80);
+                t_joystickInputData.LY = (uint8_t)(0x80);
+              } else {
+                t_joystickInputData.LX = (uint8_t)(l_x);
+                t_joystickInputData.LY = (uint8_t)(0x80);
+              }
+
+              // ゲームモードがSTDモードの場合アナログ値でアクセル・ブレーキが設定可能
+              if ((stickMode == MODE_STD) || (stickMode == MODE_STDSWAP)) {
+                t_joystickInputData.RX = (uint8_t)(0x80);
+                t_joystickInputData.RY = (uint8_t)(0x80 - l_b1 + l_b2);
+              } else {
+                t_joystickInputData.RX = (uint8_t)(0x80);
+                t_joystickInputData.RY = (uint8_t)(0x80);
+              }
+            } else {
+#ifdef SERIALVAL_OUT
+              if (sjogx != jogx) {
+                sjogx = jogx;
+                Serial.print(F("DEBUG : X(ORG): "));
+                Serial.print(l_x);
+                Serial.print(F(" JOGX: "));
+                Serial.print(jogx);
+                Serial.print(F(" JOGX(MAX): "));
+                Serial.print(jogconDialMax);
+                Serial.print(F(" POWER: "));
+                Serial.print(jogxForcePower);
+                Serial.print(F(" B1: "));
+                Serial.print(b1_org);
+                Serial.print(F(" B2: "));
+                Serial.print(b2_org);
+                Serial.print(F(" BL: "));
+                Serial.println(bL_org);
+              }
+#endif
+            }
+
+
+            //最大角、設定モード
+            if (stickMode == MODE_SETTING_NEG) {
+              if (jogxPosResetEnable < 100) {
+                if (jogcon_abs_val(jogx) > 4) {
+                  // psx.setJogCommand(0x30|(jogxForcePower&0x0f));		//Zero点復帰
+                  jogxPosResetEnable = 0;
+
+                  //本来は0x30でZero点復帰するのだが、高速で移動させると滑るのでマニュアルでやる
+                  jogxForcePower = (jogcon_abs_val(jogx) / 2) + 1;  //0は弱すぎて駄目
+                  if (jogxForcePower > 0x0f) jogxForcePower = 0x0f;
+
+                  //		            	 psx.setJogCommand(0x30|(jogxForcePower&0x0f));		//Zero点復帰
+
+                  if (jogx < 0) {                              //マイナス方向の計算(左）
+                    psx.setJogCommand(0x10 | jogxForcePower);  //wheel right
+                  } else {
+                    psx.setJogCommand(0x20 | jogxForcePower);  //wheel left
+                  }
+
+                } else {
+                  jogxPosResetEnable++;
+                  //						psx.setJogCommand(0x30|(jogxForcePower&0x0f));		//Zero点復帰
+                  psx.setJogCommand(0x00);  //wheel stop
+                }
+              } else {
+                if (psx.getButtonWord() & PSB_START) {
+                  Serial.print(F("Jogcon jogconDialMax before: "));
+                  Serial.println(jogconDialMax);
+                  //センターからの相対値に変更
+                  jogconDialMax = jogcon_abs_val(jogx);
+                  //センター値近辺の場合は初期値に設定
+                  if (jogconDialMax <= 8) jogconDialMax = 100;
+
+                  //設定値を保存
+                  Serial.println(F("EEP Write!"));
+                  EEPROM.write(EEPADR_JOG_MAX_U, (byte)(jogconDialMax >> 8));
+                  EEPROM.write(EEPADR_JOG_MAX_L, (byte)(jogconDialMax & 0x00ff));
+
+                  EEPROM.commit();
+
+                  Serial.print(F("Jogcon jogconDialMax after: "));
+                  Serial.println(jogconDialMax);
+                  stickMode = beforeStickMode;
+                }
+              }
+            } else {
+              // 設定モード用フラグ処理
+              jogxPosResetEnable = 0;
+            }
+          }
+
+          break;
+
+
+
         // Dual Shock/2のボタン配置
         case PSPROTO_DUALSHOCK2:
           // Dual Shock2ではアナログボタンの値が取得できるが、使わない
@@ -892,6 +1178,9 @@ void loop() {
           b2_org = psx.getAnalogButton(PsxAnalogButton::PSAB_SQUARE);
 
         case PSPROTO_DUALSHOCK:
+
+          // PSXデジタルキー入力変換処理
+          keyConvert_psx2switch();
 
           if (psx.getLeftAnalog(lx_org, ly_org)) {
             l_x = lx_org;
@@ -924,60 +1213,13 @@ void loop() {
             t_joystickInputData.RX = (uint8_t)(r_x);
             t_joystickInputData.RY = (uint8_t)(r_y);
           }
+          break;
 
         // その他雑多なコントローラ(共通)
         default:
-          // hat_switch（これは共通処理)
-          t_joystickInputData.Hat = (uint8_t)(hatValue[(psx.getButtonWord() & 0x00f0) >> 4]);
+          // PSXデジタルキー入力変換処理
+          keyConvert_psx2switch();
 
-          // buttonSelect = Button::MINUS
-          if (psx.getButtonWord() & PSB_SELECT)
-            t_joystickInputData.Button |= (uint16_t)(Button::MINUS);
-
-          // buttonL3 = Button::LCLICK
-          if (psx.getButtonWord() & PSB_L3)
-            t_joystickInputData.Button |= (uint16_t)(Button::LCLICK);
-
-          // buttonR3 = Button::RCLICK
-          if (psx.getButtonWord() & PSB_R3)
-            t_joystickInputData.Button |= (uint16_t)(Button::RCLICK);
-
-          // buttonStart = Button::PLUS
-          if (psx.getButtonWord() & PSB_START)
-            t_joystickInputData.Button |= (uint16_t)(Button::PLUS);
-
-
-          // buttonL2 = Button::ZL
-          if (psx.getButtonWord() & PSB_L2)
-            t_joystickInputData.Button |= (uint16_t)(Button::ZL);
-
-          // buttonR2 = Button::ZR
-          if (psx.getButtonWord() & PSB_R2)
-            t_joystickInputData.Button |= (uint16_t)(Button::ZR);
-
-          // buttonR1 = Button::R
-          if (psx.getButtonWord() & PSB_R1)
-            t_joystickInputData.Button |= (uint16_t)(Button::R);
-
-          // buttonTriangle = Button::X
-          if (psx.getButtonWord() & PSB_TRIANGLE)
-            t_joystickInputData.Button |= (uint16_t)(Button::X);
-
-          // buttonCircle = Button::A
-          if (psx.getButtonWord() & PSB_CIRCLE)
-            t_joystickInputData.Button |= (uint16_t)(Button::A);
-
-          // buttonL1 = Button::L
-          if (psx.getButtonWord() & PSB_L1)
-            t_joystickInputData.Button |= (uint16_t)(Button::L);
-
-          // buttonCross = Button::B
-          if (psx.getButtonWord() & PSB_CROSS)
-            t_joystickInputData.Button |= (uint16_t)(Button::B);
-
-          // buttonSquare = Button::Y
-          if (psx.getButtonWord() & PSB_SQUARE)
-            t_joystickInputData.Button |= (uint16_t)(Button::Y);
 
           t_joystickInputData.LX = 0x80;
           t_joystickInputData.LY = 0x80;
