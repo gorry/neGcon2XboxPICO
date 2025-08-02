@@ -21,6 +21,7 @@
 //  25/07/27 V1.4   Fixed bug not working DUALSHOCK/2 AnalogStick.
 //                  Fixed bug missing position JOGCON
 //                  Support JOGCON Forceback
+//  25/08/02 V1.5   Support HORI ZEROTECH Controller
 //
 //
 // This program requires same librarys
@@ -75,6 +76,8 @@
 // これを超えるとForcebackが入る、ただし強さが2になるまで人間では分からん
 #define JOG_MAX_AJST -4
 
+// neGconモードでL/RボタンをY/Bに割り当てる設定
+//#define LR2YB_SWAP
 
 //NeoPixelの設定
 #define NUMPIXELS 1
@@ -641,7 +644,7 @@ void loop() {
       //     	digitalWrite(PIN_CONNECT, HIGH);
       digitalWrite(PIN_GOODLED, HIGH);
 
-      Serial.println(F("Controller lost :("));
+      Serial.println(F("Controller lost :x"));
       haveController = false;
       psxContType = PSCTRL_UNKNOWN;  //Stickモードを更新しておく
       psxStickMode = PSPROTO_UNKNOWN;
@@ -857,9 +860,14 @@ void loop() {
           if (psx.getButtonWord() & PSB_R2)
             t_joystickInputData.Button |= (uint16_t)(Button::ZR);
 
-          // buttonR1 = Button::R
+// buttonR1 = Button::R
+#ifndef LR2YB_SWAP
           if (psx.getButtonWord() & PSB_R1)
             t_joystickInputData.Button |= (uint16_t)(Button::R);
+#else
+          if (psx.getButtonWord() & PSB_R1)
+            t_joystickInputData.Button |= (uint16_t)(Button::B);
+#endif
 
           // buttonTriangle = Button::X
           if (psx.getButtonWord() & PSB_TRIANGLE)
@@ -903,9 +911,13 @@ void loop() {
 
             if ((stickMode == MODE_STD) || (stickMode == MODE_STDSWAP)) {
               digitalWrite(PIN_CONNECT, LOW);
-
+#ifndef LR2YB_SWAP
               // L buttonのデジタル化処理（アソビ領域判定）
               if (l_bL > 0x60) t_joystickInputData.Button |= (uint16_t)(Button::L);
+#else
+              // L buttonのデジタル化処理（アソビ領域判定）
+              if (l_bL > 0x60) t_joystickInputData.Button |= (uint16_t)(Button::Y);
+#endif
             }
 
             if ((stickMode == MODE_DX) || (stickMode == MODE_DXSWAP)) {
@@ -1236,5 +1248,6 @@ void loop() {
 
   //ネジコンはフレーム待ちしないでも正常に値が取れるので削除
   // Only poll "once per frame" ;)
-  //	delay (1000 / 60);
+  //  delay (1000 / 60);
+  delay(1);
 }
