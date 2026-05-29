@@ -663,7 +663,7 @@ void loop() {
 
             // II (Square) = X
             if (buttons & PSB_SQUARE)
-              XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_X;
+              XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_Y;
 
             // SELECT = BACK
             if (buttons & PSB_SELECT)
