@@ -71,15 +71,11 @@ static DummySerial Serial_Dummy;
 #define NEO_PWR 11  // GPIO11
 #define NEOPIX 12  // GPIO12
 
-// Stick Mode
+//Stick Mode
 #define MODE_STD 0
-#define MODE_DX 1
-#define MODE_AIRCON22 2
-#define MODE_ANALOG 3
-#define MODE_STDSWAP 4
-#define MODE_DXSWAP 5
-#define MODE_NEGDIGTAL 6
-#define MODE_DIGTAL 7
+#define MODE_SWAPAB 1
+#define MODE_SWAPLTRT 2
+#define MODE_SWAPAB_SWAPLTRT 3
 
 #define MODE_SETTING_NEG 98
 #define MODE_LOST 99
@@ -230,9 +226,9 @@ byte restoreNegStickMode() {
 
   switch (tmp) {
     case MODE_STD:
-    case MODE_STDSWAP:
-    case MODE_DX:
-    case MODE_DXSWAP:
+    case MODE_SWAPAB:
+    case MODE_SWAPLTRT:
+    case MODE_SWAPAB_SWAPLTRT:
       break;
 
     default:
@@ -349,42 +345,30 @@ void loop1() {  // core 0
 
   switch (stickMode) {
     case MODE_STD:
+      // 青色ベース（標準モード、無入力時は青）
+      // pixels.setPixelColor(0, pixels.Color(ledB1 / 2 + ledBL / 2, ledB2 / 2 + ledBL / 2, 0x80 + ledLx / 4));
       pixels.setPixelColor(0, pixels.Color(ledB1 / 2 + ledBL / 2, ledB2 / 2 + ledBL / 2, ledLx));
       pixels.show();
       break;
 
-    case MODE_STDSWAP:
+    case MODE_SWAPAB:
+      // オレンジ・赤ベース (A/Bスワップ、無入力時は紫)
+      // pixels.setPixelColor(0, pixels.Color(0x80 + ledLx / 4, 0x20 + ledB1 / 2, 0));
       pixels.setPixelColor(0, pixels.Color(0x80 - ledB1 + ledB2, 0, ledLx));
       pixels.show();
       break;
 
-    case MODE_DX:
+    case MODE_SWAPLTRT:
+      // 緑色ベース (LT/RTスワップ、無入力時は緑)
+      // pixels.setPixelColor(0, pixels.Color(0, 0x80 + ledLx / 4, ledB2 / 2));
       pixels.setPixelColor(0, pixels.Color(ledB2 / 2 + ledBL / 2, ledLx, ledB1 / 2 + ledBL / 2));
       pixels.show();
       break;
 
-    case MODE_DXSWAP:
+    case MODE_SWAPAB_SWAPLTRT:
+      // 紫・マゼンタベース (両方スワップ、無入力時は水色)
+      // pixels.setPixelColor(0, pixels.Color(0x80 + ledLx / 4, 0, 0x80 + ledB2 / 2 + ledBL / 2));
       pixels.setPixelColor(0, pixels.Color(0, 0x80 - ledB1 + ledB2, ledLx / 2 + ledBL / 2));
-      pixels.show();
-      break;
-
-    case MODE_NEGDIGTAL:
-      pixels.setPixelColor(0, pixels.Color(0x20, 0x20, 0x20));
-      pixels.show();
-      break;
-
-    case MODE_AIRCON22:
-      pixels.setPixelColor(0, pixels.Color(ledRy / 4, ledLx / 8, ledLy / 8 + 0x40));
-      pixels.show();
-      break;
-
-    case MODE_ANALOG:
-      pixels.setPixelColor(0, pixels.Color(0, ledRy / 4 + ledLx / 2, ledRy / 2 + ledRx / 4));
-      pixels.show();
-      break;
-
-    case MODE_DIGTAL:
-      pixels.setPixelColor(0, pixels.Color(0, 0, 0));
       pixels.show();
       break;
   }
@@ -480,11 +464,10 @@ void loop() {
     digitalWrite(PIN_ERRORLED, HIGH);
     if (changeNegStickMode) {
       if ((OldpsxStickMode == PSPROTO_NEGCON) || (OldpsxStickMode == PSPROTO_JOGCON)) {
-        if (stickMode == MODE_STD) stickMode = MODE_DX;
-        else if (stickMode == MODE_DX) stickMode = MODE_STDSWAP;
-        else if (stickMode == MODE_STDSWAP) stickMode = MODE_DXSWAP;
-        else if (stickMode == MODE_DXSWAP) stickMode = MODE_NEGDIGTAL;
-        else if (stickMode == MODE_NEGDIGTAL) stickMode = MODE_STD;
+        if (stickMode == MODE_STD) stickMode = MODE_SWAPAB;
+        else if (stickMode == MODE_SWAPAB) stickMode = MODE_SWAPLTRT;
+        else if (stickMode == MODE_SWAPLTRT) stickMode = MODE_SWAPAB_SWAPLTRT;
+        else if (stickMode == MODE_SWAPAB_SWAPLTRT) stickMode = MODE_STD;
         else stickMode = MODE_STD;
 
         Serial.println(F("EEP Write!"));
@@ -557,9 +540,9 @@ void loop() {
       psxStickMode = psx.getProtocol();
 
       if (psxStickMode != OldpsxStickMode) {
-        if (psxStickMode == PSPROTO_DIGITAL) stickMode = MODE_DIGTAL;
-        if (psxStickMode == PSPROTO_FLIGHTSTICK) stickMode = MODE_AIRCON22;
-        if ((psxStickMode == PSPROTO_DUALSHOCK) || (psxStickMode == PSPROTO_DUALSHOCK2)) stickMode = MODE_ANALOG;
+        if (psxStickMode == PSPROTO_DIGITAL) stickMode = MODE_STD;
+        if (psxStickMode == PSPROTO_FLIGHTSTICK) stickMode = MODE_STD;
+        if ((psxStickMode == PSPROTO_DUALSHOCK) || (psxStickMode == PSPROTO_DUALSHOCK2)) stickMode = MODE_STD;
         if ((psxStickMode == PSPROTO_NEGCON) || (psxStickMode == PSPROTO_JOGCON)) stickMode = restoreNegStickMode();
         if (psxStickMode == PSPROTO_JOGCON) {
           delay(300);
@@ -661,7 +644,7 @@ void loop() {
 
         // NeGconのボタン配置処理(リッジレーサモード)
         case PSPROTO_NEGCON:
-          if (stickMode == MODE_STD) {
+          if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
             uint16_t buttons = psx.getButtonWord();
 
             // ハットスイッチ (十字キー)
@@ -678,14 +661,6 @@ void loop() {
             if (buttons & PSB_R1)
               XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
 
-            // A (Triangle) = A
-            if (buttons & PSB_TRIANGLE)
-              XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
-
-            // B (Circle) = B
-            if (buttons & PSB_CIRCLE)
-              XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
-
             // II (Square) = X
             if (buttons & PSB_SQUARE)
               XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_X;
@@ -693,21 +668,30 @@ void loop() {
             // SELECT = BACK
             if (buttons & PSB_SELECT)
               XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
+
+            // A (Triangle) / B (Circle) のマッピング (A/Bスワップ考慮)
+            if (stickMode == MODE_SWAPAB || stickMode == MODE_SWAPAB_SWAPLTRT) {
+              // AボタンとBボタンを入れ替える
+              if (buttons & PSB_TRIANGLE)
+                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
+              if (buttons & PSB_CIRCLE)
+                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
+            } else {
+              // 標準アサイン
+              if (buttons & PSB_TRIANGLE)
+                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
+              if (buttons & PSB_CIRCLE)
+                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
+            }
           } else {
-            // 基本キー変換（START, SELECT等）
+            // 基本キー変換（その他の設定モード等用）
             keyConvert_psx2xbox();
           }
 
           if (psx.getLeftAnalog(lx_org, ly_org)) {
-            if ((stickMode == MODE_STDSWAP) || (stickMode == MODE_DXSWAP)) {
-              // I/II button SWAP mode
-              b2_org = psx.getAnalogButton(PsxAnalogButton::PSAB_CROSS);
-              b1_org = psx.getAnalogButton(PsxAnalogButton::PSAB_SQUARE);
-            } else {
-              // I/II button NORMAL mode
-              b1_org = psx.getAnalogButton(PsxAnalogButton::PSAB_CROSS);
-              b2_org = psx.getAnalogButton(PsxAnalogButton::PSAB_SQUARE);
-            }
+            # // I/II button NORMAL mode (スワップ処理はトリガーマッピング側で実施)
+            b1_org = psx.getAnalogButton(PsxAnalogButton::PSAB_CROSS);
+            b2_org = psx.getAnalogButton(PsxAnalogButton::PSAB_SQUARE);
 
             bL_org = psx.getAnalogButton(PsxAnalogButton::PSAB_L1);
 
@@ -718,34 +702,23 @@ void loop() {
             l_b2 = b2_org / 2;
             l_bL = bL_org / 2;
 
-            if (stickMode == MODE_NEGDIGTAL) {
-              digitalWrite(PIN_CONNECT, LOW);
-              if (l_b1 > 0x10) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A; // Iボタン -> A
-              if (l_b2 > 0x10) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B; // IIボタン -> B
-              if (l_bL > 0x60) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER; // Lボタン -> LB
-            }
-
-            if (stickMode == MODE_STD) {
+            if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
               digitalWrite(PIN_CONNECT, LOW);
               
-              // Iボタン = 左トリガー (LT)
-              uint16_t raw_lt = (uint16_t)l_b1 * 2;
-              XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
+              if (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+                // LTボタンとRTボタンを入れ替える (I = RT, L = LT)
+                uint16_t raw_rt = (uint16_t)l_b1 * 2;
+                XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
 
-              // Lボタン = 右トリガー (RT)
-              uint16_t raw_rt = (uint16_t)l_bL * 2;
-              XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
-            } else if ((stickMode == MODE_STDSWAP) || (stickMode == MODE_DX) || (stickMode == MODE_DXSWAP)) {
-              digitalWrite(PIN_CONNECT, (stickMode == MODE_DX || stickMode == MODE_DXSWAP) ? HIGH : LOW);
-              
-              // XboxではLT / RTがアナログトリガーとしてネイティブサポートされているため、PWMではなく真のアナログ値をセット可能
-              uint16_t raw_rt = (uint16_t)l_b1 * 2;
-              uint16_t raw_lt = (uint16_t)l_b2 * 2;
-              XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt; // Iボタン = 右トリガー (アクセル)
-              XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt; // IIボタン = 左トリガー (ブレーキ)
+                uint16_t raw_lt = (uint16_t)l_bL * 2;
+                XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
+              } else {
+                // 標準アサイン (I = LT, L = RT)
+                uint16_t raw_lt = (uint16_t)l_b1 * 2;
+                XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
 
-              if (l_bL > 0x60) {
-                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER; // Lボタン = LB
+                uint16_t raw_rt = (uint16_t)l_bL * 2;
+                XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
               }
             }
 
@@ -771,13 +744,8 @@ void loop() {
             }
 
             // 最終的な値をセット (ハンドル)
-            if (stickMode == MODE_NEGDIGTAL) {
-              XboxButtonData.l_x = 0;
-              XboxButtonData.l_y = 0;
-            } else {
-              XboxButtonData.l_x = (int16_t)(((int32_t)l_x - 128) * 32767 / 128);
-              XboxButtonData.l_y = 0;
-            }
+            XboxButtonData.l_x = (int16_t)(((int32_t)l_x - 128) * 32767 / 128);
+            XboxButtonData.l_y = 0;
 
             // 最大角、設定モード
             if (stickMode == MODE_SETTING_NEG) {
@@ -804,7 +772,17 @@ void loop() {
 
         // Jogcon
         case PSPROTO_JOGCON:
-          keyConvert_psx2xbox();
+          if (stickMode == MODE_SWAPAB || stickMode == MODE_SWAPAB_SWAPLTRT) {
+            keyConvert_psx2xbox();
+            // AボタンとBボタンのデジタル出力を入れ替える
+            uint8_t a_pressed = XboxButtonData.digital_buttons_2 & XINPUT_GAMEPAD_A;
+            uint8_t b_pressed = XboxButtonData.digital_buttons_2 & XINPUT_GAMEPAD_B;
+            XboxButtonData.digital_buttons_2 &= ~(XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B);
+            if (a_pressed) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
+            if (b_pressed) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
+          } else {
+            keyConvert_psx2xbox();
+          }
 
           if (psx.getJogConAnalog(jogx)) {
             // MAX値を超えた場合のForceback処理
@@ -834,13 +812,8 @@ void loop() {
             b1_org = 0x00;
             b2_org = 0x00;
 
-            if ((stickMode == MODE_STDSWAP) || (stickMode == MODE_DXSWAP)) {
-              if (psx.getButtonWord() & PSB_CROSS) b2_org = 0xff;
-              if (psx.getButtonWord() & PSB_SQUARE) b1_org = 0xff;
-            } else {
-              if (psx.getButtonWord() & PSB_CROSS) b1_org = 0xff;
-              if (psx.getButtonWord() & PSB_SQUARE) b2_org = 0xff;
-            }
+            if (psx.getButtonWord() & PSB_CROSS) b1_org = 0xff;
+            if (psx.getButtonWord() & PSB_SQUARE) b2_org = 0xff;
 
             l_b1 = b1_org / 2;
             l_b2 = b2_org / 2;
@@ -858,20 +831,24 @@ void loop() {
             }
 
             // 最終的な値をセット (ハンドル)
-            if (stickMode == MODE_NEGDIGTAL) {
-              XboxButtonData.l_x = 0;
-              XboxButtonData.l_y = 0;
-            } else {
-              XboxButtonData.l_x = (int16_t)calc_lx;
-              XboxButtonData.l_y = 0;
-            }
+            XboxButtonData.l_x = (int16_t)calc_lx;
+            XboxButtonData.l_y = 0;
 
-            // ゲームモードがSTDモードの場合アナログ値でアクセル・ブレーキが設定可能
-            if ((stickMode == MODE_STD) || (stickMode == MODE_STDSWAP)) {
-              uint16_t raw_rt = (uint16_t)l_b1 * 2;
-              uint16_t raw_lt = (uint16_t)l_b2 * 2;
-              XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
-              XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
+            // ゲームモードが有効な場合アナログ値でアクセル・ブレーキが設定可能 (スワップ考慮)
+            if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+              if (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+                // LT/RT スワップ (I = RT, II = LT)
+                uint16_t raw_rt = (uint16_t)l_b1 * 2;
+                uint16_t raw_lt = (uint16_t)l_b2 * 2;
+                XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
+                XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
+              } else {
+                // 標準アサイン (I = LT, II = RT)
+                uint16_t raw_lt = (uint16_t)l_b1 * 2;
+                uint16_t raw_rt = (uint16_t)l_b2 * 2;
+                XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
+                XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
+              }
             }
 
             // 最大角、設定モード
