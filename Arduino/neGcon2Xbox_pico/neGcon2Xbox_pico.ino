@@ -10,7 +10,7 @@
 
 #include "Arduino.h"
 
-// XInput ���[�h�ł� CDC (Serial) �C���^�[�t�F�[�X�����ł��邽�߁ASerial �ւ̏������݂ɂ��t���[�Y��h�����߂ɋ����_�~�[�����܂�
+  // XInput モードでは CDC (Serial) インターフェースが消滅するため、Serial への書き込みによるフリーズを防ぐために強制ダミー化します
 #define Serial Serial_Dummy
 class DummySerial {
 public:
@@ -275,11 +275,11 @@ int adjustXY(byte lx, byte max) {
   return lx_tmp;
 }
 
-// プレスヂ�ントローラ向けの標準キー配置のXboxへの変換処�
+// プレステコントローラ向けの標準キー配置のXboxへの変換処理
 void keyConvert_psx2xbox() {
   uint16_t buttons = psx.getButtonWord();
 
-  // D-pad (�\���L�[)
+  // D-pad (十字キー)
   if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_UP;
   if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_DOWN;
   if (buttons & PSB_PAD_LEFT)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_LEFT;
@@ -301,11 +301,11 @@ void keyConvert_psx2xbox() {
   if (buttons & PSB_START)
     XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START;
 
-  // L2 = LT (左トリガー全�)
+  // L2 = LT (左トリガー全開)
   if (buttons & PSB_L2)
     XboxButtonData.lt = 255;
 
-  // R2 = RT (右トリガー全�)
+  // R2 = RT (右トリガー全開)
   if (buttons & PSB_R2)
     XboxButtonData.rt = 255;
 
@@ -388,25 +388,25 @@ void loop1() {  // core 0
       pixels.show();
       break;
   }
-  delay(50); // Sub core �̖��ʂ� CPU ��L�ƃo�X���ׂ��y�����邽�߂̃E�F�C�g
+  delay(50); // Sub core の無駄な CPU 占有とバス負荷を軽減するためのウェイト
 }
 
 void setup() {
-  // ���S�� USB XInput ���������iNo USB���[�h�� TinyUSB �N���j
+  // 安全に USB XInput を初期化（No USBモードの TinyUSB 起動）
   xboxcontroller_init();
   xboxcontroller_reset();
 
-  // ��̃X�e�[�^�XLED�̏�����
+  // 基板のステータスLEDの初期化
   pinMode(PIN_CONNECT, OUTPUT);
   pinMode(PIN_ERRORLED, OUTPUT);
   pinMode(PIN_GOODLED, OUTPUT);
 
-  // �������: LED���� (Active Low)
+  // 初期状態: LED消灯 (Active Low)
   digitalWrite(PIN_CONNECT, HIGH);
   digitalWrite(PIN_ERRORLED, HIGH);
   digitalWrite(PIN_GOODLED, HIGH);
 
-  // EEPROM�̏������ƕ����i�n�[�h�E�F�ASPI�͊��S�ɖ��������A�\�t�g�E�F�ABit-Bang���g�p�j
+  // EEPROMの初期化と復元（ハードウェアSPIは完全に無効化し、ソフトウェアBit-Bangを使用）
   EEPROM.begin(EEPROMSIZE);
   if (eepromCheck() != true) eepromFormat();
 
@@ -422,14 +422,14 @@ void setup() {
 }
 
 void loop() {
-  // TinyUSB�f�o�C�X�X�^�b�N�̃^�X�N�������ŗD��ŏ��񂳂���
+  // TinyUSBデバイススタックのタスク処理を最優先で巡回させる
   tud_task();
 
   static unsigned long lastPsxReadTime = 0;
-  static unsigned long lastSearchTime = 0; // psx.begin() �̊Ԋu�����p
+  static unsigned long lastSearchTime = 0; // psx.begin() の間隔制限用
   unsigned long now = millis();
 
-  // 16ms (��60Hz) �C���^�[�o���ŃR���g���[���[���������s���AUSB���������ő剻����
+  // 16ms (約60Hz) インターバルでコントローラー処理を実行し、USB応答性を最大化する
   if (now - lastPsxReadTime < 16) {
     xboxcontroller_send_report();
     return;
@@ -504,7 +504,7 @@ void loop() {
 
 
   if (!haveController) {
-    // �R���g���[���[�����o����1�b�Ԋu�ŒT���iUSB�񋓏����ւ̊���h���j
+    // コントローラー未検出時は1秒間隔で探索（USB列挙処理への干渉を防ぐ）
     if (now - lastSearchTime >= 1000) {
       lastSearchTime = now;
       if (psx.begin()) {
@@ -549,7 +549,7 @@ void loop() {
       OldpsxStickMode = PSPROTO_UNKNOWN;
       stickMode = MODE_LOST;
 
-      // 送信�タのリセッ�
+      // 送信データのリセット
       xboxcontroller_reset();
 
     } else {
@@ -578,7 +578,7 @@ void loop() {
       }
       OldpsxStickMode = psxStickMode;
 
-      // XInputヂ�タルボタン惱のみ毎フレー�リセッ��アナログ値は前回の値を保持
+      // XInputデジタルボタン情報のみ毎フレームリセット（アナログ値は前回の値を保持）
       XboxButtonData.digital_buttons_1 = 0;
       XboxButtonData.digital_buttons_2 = 0;
 
@@ -654,14 +654,14 @@ void loop() {
             }
           }
 
-          // �L�[�ϊ�
+          // キー変換
           keyConvert_psx2xbox();
           break;
 
 
         // NeGconのボタン配置処理(リッジレーサモード)
         case PSPROTO_NEGCON:
-          // 基本キー変換TART, SELECT等�
+          // 基本キー変換（START, SELECT等）
           keyConvert_psx2xbox();
 
           if (psx.getLeftAnalog(lx_org, ly_org)) {
@@ -686,22 +686,22 @@ void loop() {
 
             if (stickMode == MODE_NEGDIGTAL) {
               digitalWrite(PIN_CONNECT, LOW);
-              if (l_b1 > 0x10) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A; // I�{�^�� -> A
-              if (l_b2 > 0x10) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B; // II�{�^�� -> B
-              if (l_bL > 0x60) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER; // L�{�^�� -> LB
+              if (l_b1 > 0x10) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A; // Iボタン -> A
+              if (l_b2 > 0x10) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B; // IIボタン -> B
+              if (l_bL > 0x60) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER; // Lボタン -> LB
             }
 
             if ((stickMode == MODE_STD) || (stickMode == MODE_STDSWAP) || (stickMode == MODE_DX) || (stickMode == MODE_DXSWAP)) {
               digitalWrite(PIN_CONNECT, (stickMode == MODE_DX || stickMode == MODE_DXSWAP) ? HIGH : LOW);
               
-              // XboxではLT / RTがアナログトリガーとしてネイヂ�ブサポ�トされてあ�ため、PWMではなく真のアナログ値をセッ�可能
+              // XboxではLT / RTがアナログトリガーとしてネイティブサポートされているため、PWMではなく真のアナログ値をセット可能
               uint16_t raw_rt = (uint16_t)l_b1 * 2;
               uint16_t raw_lt = (uint16_t)l_b2 * 2;
-              XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt; // I�{�^�� = �E�g���K�[ (�A�N�Z��)
-              XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt; // II�{�^�� = ���g���K�[ (�u���[�L)
+              XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt; // Iボタン = 右トリガー (アクセル)
+              XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt; // IIボタン = 左トリガー (ブレーキ)
 
               if (l_bL > 0x60) {
-                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER; // L�{�^�� = LB
+                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER; // Lボタン = LB
               }
             }
 
@@ -780,7 +780,7 @@ void loop() {
               }
             }
 
-            // ダイヤル回転� Lスヂ�ヂ�X軸 にマッピング
+            // ダイヤル回転を LスティックX軸 にマッピング
             int32_t calc_lx = (int32_t)32767 * jogx / jogconDialMax;
             if (calc_lx > 32767) calc_lx = 32767;
             if (calc_lx < -32768) calc_lx = -32768;
