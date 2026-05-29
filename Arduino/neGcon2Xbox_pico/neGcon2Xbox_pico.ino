@@ -661,8 +661,42 @@ void loop() {
 
         // NeGconのボタン配置処理(リッジレーサモード)
         case PSPROTO_NEGCON:
-          // 基本キー変換（START, SELECT等）
-          keyConvert_psx2xbox();
+          if (stickMode == MODE_STD) {
+            uint16_t buttons = psx.getButtonWord();
+
+            // ハットスイッチ (十字キー)
+            if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_UP;
+            if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_DOWN;
+            if (buttons & PSB_PAD_LEFT)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_LEFT;
+            if (buttons & PSB_PAD_RIGHT) XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_RIGHT;
+
+            // START = メニュー (START)
+            if (buttons & PSB_START)
+              XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START;
+
+            // R (R1) = シェア (BACK)
+            if (buttons & PSB_R1)
+              XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
+
+            // A (Triangle) = A
+            if (buttons & PSB_TRIANGLE)
+              XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
+
+            // B (Circle) = B
+            if (buttons & PSB_CIRCLE)
+              XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
+
+            // II (Square) = X
+            if (buttons & PSB_SQUARE)
+              XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_X;
+
+            // SELECT = BACK
+            if (buttons & PSB_SELECT)
+              XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
+          } else {
+            // 基本キー変換（START, SELECT等）
+            keyConvert_psx2xbox();
+          }
 
           if (psx.getLeftAnalog(lx_org, ly_org)) {
             if ((stickMode == MODE_STDSWAP) || (stickMode == MODE_DXSWAP)) {
@@ -691,7 +725,17 @@ void loop() {
               if (l_bL > 0x60) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER; // Lボタン -> LB
             }
 
-            if ((stickMode == MODE_STD) || (stickMode == MODE_STDSWAP) || (stickMode == MODE_DX) || (stickMode == MODE_DXSWAP)) {
+            if (stickMode == MODE_STD) {
+              digitalWrite(PIN_CONNECT, LOW);
+              
+              // Iボタン = 左トリガー (LT)
+              uint16_t raw_lt = (uint16_t)l_b1 * 2;
+              XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
+
+              // Lボタン = 右トリガー (RT)
+              uint16_t raw_rt = (uint16_t)l_bL * 2;
+              XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
+            } else if ((stickMode == MODE_STDSWAP) || (stickMode == MODE_DX) || (stickMode == MODE_DXSWAP)) {
               digitalWrite(PIN_CONNECT, (stickMode == MODE_DX || stickMode == MODE_DXSWAP) ? HIGH : LOW);
               
               // XboxではLT / RTがアナログトリガーとしてネイティブサポートされているため、PWMではなく真のアナログ値をセット可能
