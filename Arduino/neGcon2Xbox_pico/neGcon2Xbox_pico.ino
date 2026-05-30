@@ -146,6 +146,16 @@ byte lxMax;
 byte analogLxMax;
 short jogconDialMax;
 
+// STARTメタキー機能のための状態定義
+enum MetaKeyState {
+  META_STATE_IDLE = 0,
+  META_STATE_START_PRESSED,
+  META_STATE_ACTIVE,
+  META_STATE_NORMAL_START
+};
+static MetaKeyState metaState = META_STATE_IDLE;
+static unsigned long menuOnUntil = 0;
+
 // EEPROMのClear関数
 void eepromFormat() {
   Serial.println(F("EEP Write!"));
@@ -272,9 +282,7 @@ int adjustXY(byte lx, byte max) {
 }
 
 // プレステコントローラ向けの標準キー配置のXboxへの変換処理
-void keyConvert_psx2xbox() {
-  uint16_t buttons = psx.getButtonWord();
-
+void keyConvert_psx2xbox_ex(uint16_t buttons) {
   // D-pad (十字キー)
   if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_UP;
   if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_DOWN;
@@ -328,6 +336,10 @@ void keyConvert_psx2xbox() {
   // Square = X
   if (buttons & PSB_SQUARE)
     XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_X;
+}
+
+void keyConvert_psx2xbox() {
+  keyConvert_psx2xbox_ex(psx.getButtonWord());
 }
 
 
@@ -565,6 +577,59 @@ void loop() {
       XboxButtonData.digital_buttons_1 = 0;
       XboxButtonData.digital_buttons_2 = 0;
 
+      // 100ms単発クリックタイマーの処理
+      if (menuOnUntil > 0) {
+        if (now < menuOnUntil) {
+          XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START;
+        } else {
+          menuOnUntil = 0;
+        }
+      }
+
+      // STARTメタキー判定（neGcon/Jogcon用）
+      if (psxStickMode == PSPROTO_NEGCON || psxStickMode == PSPROTO_JOGCON) {
+        uint16_t buttons = psx.getButtonWord();
+        bool startPressed = (buttons & PSB_START) != 0;
+        const uint16_t DIGITAL_BUTTONS_MASK = (PSB_PAD_UP | PSB_PAD_DOWN | PSB_PAD_LEFT | PSB_PAD_RIGHT | PSB_TRIANGLE | PSB_CIRCLE | PSB_R1);
+        bool anyDigitalPressed = (buttons & DIGITAL_BUTTONS_MASK) != 0;
+
+        switch (metaState) {
+          case META_STATE_IDLE:
+            if (startPressed) {
+              if (anyDigitalPressed) {
+                metaState = META_STATE_NORMAL_START;
+              } else {
+                metaState = META_STATE_START_PRESSED;
+              }
+            }
+            break;
+
+          case META_STATE_NORMAL_START:
+            if (!startPressed) {
+              metaState = META_STATE_IDLE;
+            }
+            break;
+
+          case META_STATE_START_PRESSED:
+            if (!startPressed) {
+              menuOnUntil = millis() + 100;
+              metaState = META_STATE_IDLE;
+            } else if (anyDigitalPressed) {
+              metaState = META_STATE_ACTIVE;
+            }
+            break;
+
+          case META_STATE_ACTIVE:
+            if (!startPressed && !anyDigitalPressed) {
+              metaState = META_STATE_IDLE;
+            }
+            break;
+        }
+      } else {
+        // neGcon/Jogcon以外のプロトコル時はメタ状態をIDLEにする
+        metaState = META_STATE_IDLE;
+      }
+
       switch (psxStickMode) {
 
         // SPCH-1110 FLIGHTSTICK mode (AirCombat22 mode) ボタン設定はdefaultのモノに最適化してあります
@@ -647,41 +712,67 @@ void loop() {
           if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
             uint16_t buttons = psx.getButtonWord();
 
-            // ハットスイッチ (十字キー)
-            if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_UP;
-            if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_DOWN;
-            if (buttons & PSB_PAD_LEFT)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_LEFT;
-            if (buttons & PSB_PAD_RIGHT) XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_RIGHT;
+            if (metaState == META_STATE_ACTIVE) {
+              // ---------------- メタ状態 ----------------
+              if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_X;
+              if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_GUIDE;
+              if (buttons & PSB_PAD_LEFT)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER;
+              if (buttons & PSB_PAD_RIGHT) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
+              if (buttons & PSB_TRIANGLE)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_LEFT_THUMB;
+              if (buttons & PSB_CIRCLE)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_RIGHT_THUMB;
+              if (buttons & PSB_R1)        XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
 
-            // START = メニュー (START)
-            if (buttons & PSB_START)
-              XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START;
+              // II (Square) = Y
+              if (buttons & PSB_SQUARE)
+                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_Y;
 
-            // R (R1) = シェア (BACK)
-            if (buttons & PSB_R1)
-              XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
-
-            // II (Square) = X
-            if (buttons & PSB_SQUARE)
-              XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_Y;
-
-            // SELECT = BACK
-            if (buttons & PSB_SELECT)
-              XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
-
-            // A (Triangle) / B (Circle) のマッピング (A/Bスワップ考慮)
-            if (stickMode == MODE_SWAPAB || stickMode == MODE_SWAPAB_SWAPLTRT) {
-              // AボタンとBボタンを入れ替える
-              if (buttons & PSB_TRIANGLE)
-                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
-              if (buttons & PSB_CIRCLE)
-                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
+              // SELECT = BACK
+              if (buttons & PSB_SELECT)
+                XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
             } else {
-              // 標準アサイン
-              if (buttons & PSB_TRIANGLE)
-                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
-              if (buttons & PSB_CIRCLE)
-                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
+              // ---------------- 通常状態 / NORMAL_START ----------------
+              // ハットスイッチ (十字キー)
+              if (metaState != META_STATE_START_PRESSED) { // START長押し中の誤出力を防ぐ
+                if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_UP;
+                if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_DOWN;
+                if (buttons & PSB_PAD_LEFT)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_LEFT;
+                if (buttons & PSB_PAD_RIGHT) XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_RIGHT;
+              }
+
+              // START = メニュー (START)
+              if (metaState == META_STATE_NORMAL_START)
+                XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START;
+
+              // R (R1) = シェア (BACK)
+              if (metaState != META_STATE_START_PRESSED) {
+                if (buttons & PSB_R1)
+                  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
+              }
+
+              // II (Square) = Y
+              if (buttons & PSB_SQUARE)
+                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_Y;
+
+              // SELECT = BACK
+              if (buttons & PSB_SELECT)
+                XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
+
+              // A (Triangle) / B (Circle) のマッピング (A/Bスワップ考慮)
+              if (metaState != META_STATE_START_PRESSED) {
+                if (stickMode == MODE_SWAPAB || stickMode == MODE_SWAPAB_SWAPLTRT) {
+                  // AボタンとBボタンを入れ替える
+                  if (buttons & PSB_TRIANGLE)
+                    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
+                  if (buttons & PSB_CIRCLE)
+                    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
+                } else {
+                  // 標準アサイン
+                  if (buttons & PSB_TRIANGLE)
+                    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
+                  if (buttons & PSB_CIRCLE)
+                    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
+                }
+              }
             }
           } else {
             // 基本キー変換（その他の設定モード等用）
@@ -772,16 +863,52 @@ void loop() {
 
         // Jogcon
         case PSPROTO_JOGCON:
-          if (stickMode == MODE_SWAPAB || stickMode == MODE_SWAPAB_SWAPLTRT) {
-            keyConvert_psx2xbox();
-            // AボタンとBボタンのデジタル出力を入れ替える
-            uint8_t a_pressed = XboxButtonData.digital_buttons_2 & XINPUT_GAMEPAD_A;
-            uint8_t b_pressed = XboxButtonData.digital_buttons_2 & XINPUT_GAMEPAD_B;
-            XboxButtonData.digital_buttons_2 &= ~(XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B);
-            if (a_pressed) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
-            if (b_pressed) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
-          } else {
-            keyConvert_psx2xbox();
+          {
+            uint16_t buttons = psx.getButtonWord();
+            const uint16_t DIGITAL_BUTTONS_MASK = (PSB_PAD_UP | PSB_PAD_DOWN | PSB_PAD_LEFT | PSB_PAD_RIGHT | PSB_TRIANGLE | PSB_CIRCLE | PSB_R1);
+
+            if (metaState == META_STATE_ACTIVE) {
+              // ---------------- メタ状態 ----------------
+              if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_Y;
+              if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_GUIDE;
+              if (buttons & PSB_PAD_LEFT)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER;
+              if (buttons & PSB_PAD_RIGHT) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
+              if (buttons & PSB_TRIANGLE)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_LEFT_THUMB;
+              if (buttons & PSB_CIRCLE)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_RIGHT_THUMB;
+              if (buttons & PSB_R1)        XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
+
+              // メタ状態に関与しない他のボタンは、メタ対象ボタンおよびSTARTを除外したボタンワードで処理する
+              uint16_t other_buttons = buttons & ~(DIGITAL_BUTTONS_MASK | PSB_START);
+              keyConvert_psx2xbox_ex(other_buttons);
+            } else {
+              // ---------------- 通常状態 / NORMAL_START / START_PRESSED ----------------
+              uint16_t masked_buttons = buttons;
+
+              // START_PRESSED時は、十字キー、A/B、R1の入力を抑止する
+              if (metaState == META_STATE_START_PRESSED) {
+                masked_buttons &= ~DIGITAL_BUTTONS_MASK;
+              }
+
+              // STARTボタンの反映制御
+              if (metaState == META_STATE_NORMAL_START) {
+                masked_buttons |= PSB_START;
+              } else {
+                masked_buttons &= ~PSB_START;
+              }
+
+              keyConvert_psx2xbox_ex(masked_buttons);
+
+              // A/Bスワップ処理の適用
+              if (stickMode == MODE_SWAPAB || stickMode == MODE_SWAPAB_SWAPLTRT) {
+                if (metaState != META_STATE_START_PRESSED) {
+                  uint8_t a_pressed = XboxButtonData.digital_buttons_2 & XINPUT_GAMEPAD_A;
+                  uint8_t b_pressed = XboxButtonData.digital_buttons_2 & XINPUT_GAMEPAD_B;
+                  XboxButtonData.digital_buttons_2 &= ~(XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B);
+                  if (a_pressed) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
+                  if (b_pressed) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
+                }
+              }
+            }
           }
 
           if (psx.getJogConAnalog(jogx)) {
