@@ -354,6 +354,7 @@ void setup1() {  // core 0
 void loop1() {  // core 0
   static byte heartbeat_num = 0;
   static bool heartbeat_flag = true;
+  const byte heartbeat_speed = 32;
 
   switch (stickMode) {
     case MODE_STD:
@@ -383,7 +384,35 @@ void loop1() {  // core 0
       pixels.setPixelColor(0, pixels.Color(0, 0x80 - ledB1 + ledB2, ledLx / 2 + ledBL / 2));
       pixels.show();
       break;
+
+    case MODE_SETTING_NEG:
+      pixels.setPixelColor(0, pixels.Color(0x0, 0x0, heartbeat_num));
+      pixels.show();
+      break;
+
+    default:
+      pixels.clear();
+      pixels.show();
+      break;
   }
+
+  //LEDの点滅処理数値計算 (delay(50)にあわせてステップ幅を8に調整し、約3秒周期で明滅)
+  if (heartbeat_flag) {
+    if (heartbeat_num >= 255 - heartbeat_speed) {
+      heartbeat_num = 255;
+      heartbeat_flag = false;
+    } else {
+      heartbeat_num += heartbeat_speed;
+    }
+  } else {
+    if (heartbeat_num <= heartbeat_speed) {
+      heartbeat_num = 0;
+      heartbeat_flag = true;
+    } else {
+      heartbeat_num -= heartbeat_speed;
+    }
+  }
+
   delay(50); // Sub core の無駄な CPU 占有とバス負荷を軽減するためのウェイト
 }
 
