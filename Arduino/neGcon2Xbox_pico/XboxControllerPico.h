@@ -21,10 +21,10 @@
 #define XINPUT_GAMEPAD_LEFT_SHOULDER    0x01
 #define XINPUT_GAMEPAD_RIGHT_SHOULDER   0x02
 #define XINPUT_GAMEPAD_GUIDE            0x04
-#define XINPUT_GAMEPAD_A                0x10
-#define XINPUT_GAMEPAD_B                0x20
-#define XINPUT_GAMEPAD_Y                0x40
-#define XINPUT_GAMEPAD_X                0x80
+#define XINPUT_GAMEPAD_A                0x20
+#define XINPUT_GAMEPAD_B                0x10
+#define XINPUT_GAMEPAD_X                0x40
+#define XINPUT_GAMEPAD_Y                0x80
 
 // XInput 送信データ構造体 (20バイト)
 typedef struct {
