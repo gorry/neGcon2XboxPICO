@@ -455,14 +455,14 @@ void loop() {
   // BOOTスイッチの処理 現状MODE選択に割り当てている
   if (BOOTSEL) {
     digitalWrite(PIN_ERRORLED, LOW);
-    if (sBootSel < 3000) {
+    if (sBootSel < 188) {
       if (sBootSel == 0) changeNegStickMode = false;
       if (sBootSel == 9) {
         changeNegStickMode = true;
         Serial.print(F("Current Stick mode is: "));
         Serial.println(stickMode);
       }
-      if (sBootSel == 2999) {
+      if (sBootSel == 187) {
         if ((OldpsxStickMode == PSPROTO_NEGCON) || (OldpsxStickMode == PSPROTO_JOGCON) || (OldpsxStickMode == PSPROTO_FLIGHTSTICK)) {
           Serial.println(F("Set Config mode"));
           changeNegStickMode = false;
