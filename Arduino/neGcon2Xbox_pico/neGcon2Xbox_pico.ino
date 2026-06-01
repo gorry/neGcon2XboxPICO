@@ -56,12 +56,13 @@ static DummySerial Serial_Dummy;
 #define EEPADR_ANALOG_STICKMAX 5
 #define EEPADR_JOG_MAX_U 6
 #define EEPADR_JOG_MAX_L 7
+#define EEPADR_NEG_REDUCE_HANDLE_PLAY 8
 
 // neGcon ハンドルアナログ値の補正 これ以上の補正が必要な場合は、設定→ボタン→こだわりのボタン設定→感度設定を弄ってください。
-#define NEG_CALIB 1.2
+#define NEG_CALIB 1.1
 
 // neGcon ボタン アナログ値の補正 これ以上の補正が必要な場合は、設定→ボタン→こだわりのボタン設定→感度設定を弄ってください。
-#define NEG_CALIB_B 1.1
+#define NEG_CALIB_B 1.0
 
 // jogconの境界線補正値 これを超えるとForcebackが入る、ただし強さが2になるまで人間では分からん
 #define JOG_MAX_AJST -4
@@ -147,6 +148,7 @@ byte stickMode;
 byte lxMax;
 byte analogLxMax;
 short jogconDialMax;
+byte negReduceHandlePlay = 16;
 
 // STARTメタキー機能のための状態定義
 enum MetaKeyState {
@@ -172,6 +174,7 @@ void eepromFormat() {
   EEPROM.write(EEPADR_ANALOG_STICKMAX, 255);
   EEPROM.write(EEPADR_JOG_MAX_U, 0);
   EEPROM.write(EEPADR_JOG_MAX_L, 100);
+  EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, 17); // ゲタ（+1）をはかせて初期値16を保存
   EEPROM.commit();
 }
 
@@ -253,6 +256,30 @@ byte restoreNegStickMode() {
   }
 
   return tmp;
+}
+
+// neGcon遊び削減値の復帰
+byte restoreNegReduceHandlePlay() {
+  byte tmp;
+  tmp = EEPROM.read(EEPADR_NEG_REDUCE_HANDLE_PLAY);
+
+  // ゲタ（+1）を考慮し、未設定（0）または範囲外（33より大きい）なら初期値16（ゲタありで17）にする
+  if (tmp == 0 || tmp > 33) {
+    tmp = 17; // 16 + 1 (ゲタ)
+    Serial.println(F("EEP Write!"));
+    EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, tmp);
+    EEPROM.commit();
+  }
+
+  return tmp - 1; // ゲタ（-1）をはずして 0-32 の実際の値を返す
+}
+
+// XInputデータを安全に送信（設定モード中は入力をニュートラルにする）
+void send_xbox_report() {
+  if (stickMode == MODE_SETTING_NEG) {
+    xboxcontroller_reset();
+  }
+  xboxcontroller_send_report();
 }
 
 // 絶対値 計算関数
@@ -395,8 +422,14 @@ void loop1() {  // core 0
       break;
 
     case MODE_SETTING_NEG:
-      pixels.setPixelColor(0, pixels.Color(0x0, 0x0, heartbeat_num));
-      pixels.show();
+      {
+        // heartbeat_num で B値（青）を明滅、ねじり値でG値（緑）を明滅、negReduceHandlePlay に比例した固定輝度で R値（赤）を点灯
+        // 32 * 8 = 256 となり byte (0-255) からオーバーフローして 0 に戻るのを防ぐため、32の時は255にする
+        byte r_val = (negReduceHandlePlay == 32) ? 255 : (negReduceHandlePlay * 8);
+        byte g_val = ledLx;
+        pixels.setPixelColor(0, pixels.Color(r_val, g_val, heartbeat_num));
+        pixels.show();
+      }
       break;
 
     default:
@@ -447,6 +480,7 @@ void setup() {
   lxMax = restoreNegDegMax();
   analogLxMax = restoreAnaDegMax();
   jogconDialMax = restorejogMax();
+  negReduceHandlePlay = restoreNegReduceHandlePlay();
   
   stickMode = MODE_LOST;
   delay(300);
@@ -465,7 +499,7 @@ void loop() {
 
   // 8ms (約125Hz) インターバルでコントローラー処理を実行し、USB応答性を最大化する
   if (now - lastPsxReadTime < 8) {
-    xboxcontroller_send_report();
+    send_xbox_report();
     return;
   }
   lastPsxReadTime = now;
@@ -714,6 +748,13 @@ void loop() {
           // 最大角、設定モード
           if (stickMode == MODE_SETTING_NEG) {
             if (psx.getButtonWord() & PSB_START) {
+              l_x_tmp = 255;
+              analogLxMax = (byte)l_x_tmp;
+              Serial.println(F("EEP Write!"));
+              EEPROM.write(EEPADR_ANALOG_STICKMAX, analogLxMax);
+              EEPROM.commit();
+            }
+            if (psx.getButtonWord() & PSB_CIRCLE) {
               Serial.print(F("Analog lxMax before: "));
               Serial.println(analogLxMax);
               l_x_tmp = absoluteXY(lx_org);
@@ -727,6 +768,7 @@ void loop() {
               xy_tmp = absoluteXY(ry_org);
               if (xy_tmp > l_x_tmp) l_x_tmp = xy_tmp;
 
+              //センター値近辺の場合は初期値に設定
               if (l_x_tmp < (0x80 + 10)) l_x_tmp = 255;
 
               analogLxMax = (byte)l_x_tmp;
@@ -828,10 +870,34 @@ void loop() {
             l_x = lx_org;
             l_y = ly_org;
 
-            l_b1 = b1_org / 2;
-            l_b2 = b2_org / 2;
-            l_bL = bL_org / 2;
+            // 1. 各アナログ値の基本的なスケール・補正（毎フレーム確実に実行）
+            l_x = (byte)adjustXY(l_x, lxMax);
 
+            // 遊びの削減（デッドゾーン相殺）の適用
+            int lx_tmp = l_x;
+            int play = negReduceHandlePlay*2;
+            if (lx_tmp > 128) {
+              lx_tmp += play;
+              if (lx_tmp > 255) lx_tmp = 255;
+            } else if (lx_tmp < 128) {
+              lx_tmp -= play;
+              if (lx_tmp < 0) lx_tmp = 0;
+            }
+            l_x = (byte)lx_tmp;
+
+            l_b1 = b1_org / 2;
+            l_b1 = l_b1 * NEG_CALIB_B;
+            if (l_b1 > 0x80) l_b1 = 0x80;
+
+            l_b2 = b2_org / 2;
+            l_b2 = l_b2 * NEG_CALIB_B;
+            if (l_b2 > 0x7f) l_b2 = 0x7f;
+
+            l_bL = bL_org / 2;
+            l_bL = l_bL * 1;
+            if (l_bL > 0x7f) l_bL = 0x7f;
+
+            // 2. Xbox送信バッファへのアナログトリガー割り当て（毎フレーム確実に実行）
             if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
               digitalWrite(PIN_CONNECT, LOW);
               
@@ -852,20 +918,12 @@ void loop() {
               }
             }
 
+            // 3. 値の変化があった時のみ LED 状態を更新（l_x や各ボタン値はすでに補正適用済み）
             if (l_x != slx || l_b1 != sb1 || l_b2 != sb2 || l_bL != sbL) {
               slx = l_x;
               sb1 = l_b1;
               sb2 = l_b2;
               sbL = l_bL;
-
-              l_x = (byte)adjustXY(l_x, lxMax);
-
-              l_b1 = l_b1 * NEG_CALIB_B;
-              if (l_b1 > 0x80) l_b1 = 0x80;
-              l_b2 = l_b2 * NEG_CALIB_B;
-              if (l_b2 > 0x7f) l_b2 = 0x7f;
-              l_bL = l_bL * 1;
-              if (l_bL > 0x7f) l_bL = 0x7f;
 
               ledLx = l_x;
               ledB1 = b1_org;
@@ -879,11 +937,49 @@ void loop() {
 
             // 最大角、設定モード
             if (stickMode == MODE_SETTING_NEG) {
-              if (psx.getButtonWord() & PSB_START) {
+              uint16_t buttons = psx.getButtonWord();
+              static uint16_t lastButtons = 0;
+
+              // 十字キー上・下で遊び削減値を変更（エッジ検出）
+              if ((buttons & PSB_PAD_UP) && !(lastButtons & PSB_PAD_UP)) {
+                if (negReduceHandlePlay < 32) {
+                  negReduceHandlePlay++;
+                  EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1); // ゲタ（+1）をはかせて保存
+                  EEPROM.commit();
+                  Serial.print(F("NEG_REDUCE_HANDLE_PLAY: "));
+                  Serial.println(negReduceHandlePlay);
+                }
+              }
+              if ((buttons & PSB_PAD_DOWN) && !(lastButtons & PSB_PAD_DOWN)) {
+                if (negReduceHandlePlay > 0) {
+                  negReduceHandlePlay--;
+                  EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1); // ゲタ（+1）をはかせて保存
+                  EEPROM.commit();
+                  Serial.print(F("NEG_REDUCE_HANDLE_PLAY: "));
+                  Serial.println(negReduceHandlePlay);
+                }
+              }
+              if ((buttons & PSB_START) && !(lastButtons & PSB_START)) {
+                negReduceHandlePlay = 16;
+                EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1); // ゲタ（+1）をはかせて保存
+                l_x_tmp = 0xff / ((NEG_CALIB - 1) / 2 + 1);
+                lxMax = (byte)l_x_tmp;
+                EEPROM.write(EEPADR_NEG_NEGMAX, lxMax);
+                EEPROM.commit();
+                Serial.print(F("NEG_REDUCE_HANDLE_PLAY: "));
+                Serial.println(negReduceHandlePlay);
+                Serial.print(F("neG lxMax after: "));
+                Serial.println(lxMax);
+                stickMode = beforeStickMode;
+              }
+              if ((buttons & PSB_CIRCLE) && !(lastButtons & PSB_CIRCLE)) {
                 Serial.print(F("neG lxMax before: "));
                 Serial.println(lxMax);
+
+                //センターからの相対値に変更
                 l_x_tmp = absoluteXY(lx_org);
 
+                //センター値近辺の場合は初期値に設定
                 if (l_x_tmp < (0x80 + 10)) l_x_tmp = 0xff / ((NEG_CALIB - 1) / 2 + 1);
 
                 lxMax = (byte)l_x_tmp;
@@ -895,6 +991,8 @@ void loop() {
                 Serial.println(lxMax);
                 stickMode = beforeStickMode;
               }
+
+              lastButtons = buttons;
             }
           }
           break;
@@ -1043,9 +1141,18 @@ void loop() {
                 }
               } else {
                 if (psx.getButtonWord() & PSB_START) {
+                  jogconDialMax = 100;
+                  EEPROM.write(EEPADR_JOG_MAX_U, (byte)(jogconDialMax >> 8));
+                  EEPROM.write(EEPADR_JOG_MAX_L, (byte)(jogconDialMax & 0x00ff));
+                  EEPROM.commit();
+                  stickMode = beforeStickMode;
+                }
+                if (psx.getButtonWord() & PSB_CIRCLE) {
                   Serial.print(F("Jogcon jogconDialMax before: "));
                   Serial.println(jogconDialMax);
+                  //センターからの相対値に変更
                   jogconDialMax = jogcon_abs_val(jogx);
+                  //センター値近辺の場合は初期値に設定
                   if (jogconDialMax <= 8) jogconDialMax = 100;
 
                   Serial.println(F("EEP Write!"));
@@ -1111,11 +1218,11 @@ void loop() {
       }
 
       // XInputデータ送信
-      xboxcontroller_send_report();
+      send_xbox_report();
     }
   }
 
-  xboxcontroller_send_report(); // 毎ループ確実に最新データをPCへ送信（認識の常時維持）
+  send_xbox_report(); // 毎ループ確実に最新データをPCへ送信（認識の常時維持）
   tud_task(); // TinyUSBデバイススタックのタスク処理を巡回させる
   delay(1);
 }
