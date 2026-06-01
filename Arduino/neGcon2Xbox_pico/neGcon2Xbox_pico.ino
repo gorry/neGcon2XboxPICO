@@ -714,7 +714,7 @@ void loop() {
 
             if (metaState == META_STATE_ACTIVE) {
               // ---------------- メタ状態 ----------------
-              if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_X;
+              if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_Y;
               if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_GUIDE;
               if (buttons & PSB_PAD_LEFT)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER;
               if (buttons & PSB_PAD_RIGHT) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
@@ -723,9 +723,9 @@ void loop() {
               if (buttons & PSB_R1)        { XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START;
                                              XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_RIGHT_SHOULDER; }
 
-              // II (Square) = Y
-              if (buttons & PSB_SQUARE)
-                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_Y;
+              // I (Cross) = X
+              if (buttons & PSB_CROSS)
+                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_X;
 
               // SELECT = BACK
               if (buttons & PSB_SELECT)
@@ -750,9 +750,9 @@ void loop() {
                   XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
               }
 
-              // II (Square) = Y
-              if (buttons & PSB_SQUARE)
-                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_Y;
+              // I (Cross) = X
+              if (buttons & PSB_CROSS)
+                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_X;
 
               // SELECT = BACK
               if (buttons & PSB_SELECT)
@@ -782,8 +782,8 @@ void loop() {
 
           if (psx.getLeftAnalog(lx_org, ly_org)) {
             # // I/II button NORMAL mode (スワップ処理はトリガーマッピング側で実施)
-            b1_org = psx.getAnalogButton(PsxAnalogButton::PSAB_CROSS);
-            b2_org = psx.getAnalogButton(PsxAnalogButton::PSAB_SQUARE);
+            b1_org = psx.getAnalogButton(PsxAnalogButton::PSAB_SQUARE);
+            b2_org = psx.getAnalogButton(PsxAnalogButton::PSAB_CROSS);
 
             bL_org = psx.getAnalogButton(PsxAnalogButton::PSAB_L1);
 
@@ -866,6 +866,12 @@ void loop() {
         case PSPROTO_JOGCON:
           {
             uint16_t buttons = psx.getButtonWord();
+            // I (CROSS) と II (SQUARE) のデジタル入力をスワップ
+            uint16_t swapped_buttons = buttons & ~(PSB_CROSS | PSB_SQUARE);
+            if (buttons & PSB_CROSS) swapped_buttons |= PSB_SQUARE;
+            if (buttons & PSB_SQUARE) swapped_buttons |= PSB_CROSS;
+            buttons = swapped_buttons;
+
             const uint16_t DIGITAL_BUTTONS_MASK = (PSB_PAD_UP | PSB_PAD_DOWN | PSB_PAD_LEFT | PSB_PAD_RIGHT | PSB_TRIANGLE | PSB_CIRCLE | PSB_R1);
 
             if (metaState == META_STATE_ACTIVE) {
@@ -941,8 +947,8 @@ void loop() {
             b1_org = 0x00;
             b2_org = 0x00;
 
-            if (psx.getButtonWord() & PSB_CROSS) b1_org = 0xff;
-            if (psx.getButtonWord() & PSB_SQUARE) b2_org = 0xff;
+            if (psx.getButtonWord() & PSB_SQUARE) b1_org = 0xff;
+            if (psx.getButtonWord() & PSB_CROSS) b2_org = 0xff;
 
             l_b1 = b1_org / 2;
             l_b2 = b2_org / 2;
