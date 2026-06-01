@@ -77,6 +77,8 @@ static DummySerial Serial_Dummy;
 #define MODE_SWAPLTRT 2
 #define MODE_SWAPAB_SWAPLTRT 3
 
+#define MODE_AIRCON22 10
+
 #define MODE_SETTING_NEG 98
 #define MODE_LOST 99
 
@@ -239,6 +241,7 @@ byte restoreNegStickMode() {
     case MODE_SWAPAB:
     case MODE_SWAPLTRT:
     case MODE_SWAPAB_SWAPLTRT:
+    case MODE_AIRCON22:
       break;
 
     default:
@@ -382,6 +385,12 @@ void loop1() {  // core 0
       // 紫・マゼンタベース (両方スワップ、無入力時は水色)
       // pixels.setPixelColor(0, pixels.Color(0x80 + ledLx / 4, 0, 0x80 + ledB2 / 2 + ledBL / 2));
       pixels.setPixelColor(0, pixels.Color(0, 0x80 - ledB1 + ledB2, ledLx / 2 + ledBL / 2));
+      pixels.show();
+      break;
+
+      // フライトコントローラ接続時の点灯パターン
+    case MODE_AIRCON22:
+      pixels.setPixelColor(0, pixels.Color(ledRy / 4, ledLx / 8, ledLy / 8 + 0x40));
       pixels.show();
       break;
 
@@ -582,7 +591,7 @@ void loop() {
 
       if (psxStickMode != OldpsxStickMode) {
         if (psxStickMode == PSPROTO_DIGITAL) stickMode = MODE_STD;
-        if (psxStickMode == PSPROTO_FLIGHTSTICK) stickMode = MODE_STD;
+        if (psxStickMode == PSPROTO_FLIGHTSTICK) stickMode = MODE_AIRCON22;
         if ((psxStickMode == PSPROTO_DUALSHOCK) || (psxStickMode == PSPROTO_DUALSHOCK2)) stickMode = MODE_STD;
         if ((psxStickMode == PSPROTO_NEGCON) || (psxStickMode == PSPROTO_JOGCON)) stickMode = restoreNegStickMode();
         if (psxStickMode == PSPROTO_JOGCON) {
