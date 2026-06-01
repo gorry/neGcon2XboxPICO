@@ -425,8 +425,8 @@ void loop() {
   static unsigned long lastSearchTime = 0; // psx.begin() の間隔制限用
   unsigned long now = millis();
 
-  // 16ms (約60Hz) インターバルでコントローラー処理を実行し、USB応答性を最大化する
-  if (now - lastPsxReadTime < 16) {
+  // 8ms (約125Hz) インターバルでコントローラー処理を実行し、USB応答性を最大化する
+  if (now - lastPsxReadTime < 8) {
     xboxcontroller_send_report();
     return;
   }
@@ -455,14 +455,14 @@ void loop() {
   // BOOTスイッチの処理 現状MODE選択に割り当てている
   if (BOOTSEL) {
     digitalWrite(PIN_ERRORLED, LOW);
-    if (sBootSel < 188) {
+    if (sBootSel < 375) {
       if (sBootSel == 0) changeNegStickMode = false;
       if (sBootSel == 9) {
         changeNegStickMode = true;
         Serial.print(F("Current Stick mode is: "));
         Serial.println(stickMode);
       }
-      if (sBootSel == 187) {
+      if (sBootSel == 374) {
         if ((OldpsxStickMode == PSPROTO_NEGCON) || (OldpsxStickMode == PSPROTO_JOGCON) || (OldpsxStickMode == PSPROTO_FLIGHTSTICK)) {
           Serial.println(F("Set Config mode"));
           changeNegStickMode = false;
