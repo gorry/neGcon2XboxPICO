@@ -57,6 +57,14 @@ static DummySerial Serial_Dummy;
 #define EEPADR_JOG_MAX_U 6
 #define EEPADR_JOG_MAX_L 7
 #define EEPADR_NEG_REDUCE_HANDLE_PLAY 8
+#define EEPADR_NEG_ANALOG_LT_CURVE 9
+#define EEPADR_NEG_ANALOG_RT_CURVE 10
+
+// アナログカーブの定義
+#define NEG_ANALOG_CURVE_LINEAR 0
+#define NEG_ANALOG_CURVE_A1     1
+#define NEG_ANALOG_CURVE_A2     2
+#define NEG_ANALOG_CURVE_A3     3
 
 // neGcon ハンドルアナログ値の補正 これ以上の補正が必要な場合は、設定→ボタン→こだわりのボタン設定→感度設定を弄ってください。
 #define NEG_CALIB 1.1
@@ -149,6 +157,9 @@ byte lxMax;
 byte analogLxMax;
 short jogconDialMax;
 byte negReduceHandlePlay = 16;
+byte negLtCurve = NEG_ANALOG_CURVE_LINEAR;
+byte negRtCurve = NEG_ANALOG_CURVE_LINEAR;
+volatile int ledFlashCount = 0;
 
 // STARTメタキー機能のための状態定義
 enum MetaKeyState {
@@ -175,7 +186,55 @@ void eepromFormat() {
   EEPROM.write(EEPADR_JOG_MAX_U, 0);
   EEPROM.write(EEPADR_JOG_MAX_L, 100);
   EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, 17); // ゲタ（+1）をはかせて初期値16を保存
+  EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, NEG_ANALOG_CURVE_LINEAR);
+  EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, NEG_ANALOG_CURVE_LINEAR);
   EEPROM.commit();
+}
+
+// neGconアナログLTカーブ設定の復帰
+byte restoreNegLtCurve() {
+  byte tmp;
+  tmp = EEPROM.read(EEPADR_NEG_ANALOG_LT_CURVE);
+  if (tmp > 3) {
+    tmp = NEG_ANALOG_CURVE_LINEAR;
+    Serial.println(F("EEP Write!"));
+    EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, tmp);
+    EEPROM.commit();
+  }
+  return tmp;
+}
+
+// neGconアナログRTカーブ設定の復帰
+byte restoreNegRtCurve() {
+  byte tmp;
+  tmp = EEPROM.read(EEPADR_NEG_ANALOG_RT_CURVE);
+  if (tmp > 3) {
+    tmp = NEG_ANALOG_CURVE_LINEAR;
+    Serial.println(F("EEP Write!"));
+    EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, tmp);
+    EEPROM.commit();
+  }
+  return tmp;
+}
+
+// neGconアナログボタンの感度カーブ適用関数
+byte applyAnalogCurve(byte value, byte curveType) {
+  if (curveType == NEG_ANALOG_CURVE_LINEAR) {
+    return value;
+  }
+  
+  float p = 1.0f;
+  if (curveType == NEG_ANALOG_CURVE_A1) p = 2.0f;
+  else if (curveType == NEG_ANALOG_CURVE_A2) p = 4.0f;
+  else if (curveType == NEG_ANALOG_CURVE_A3) p = 6.0f;
+  
+  float val_norm = (float)value / 255.0f;
+  float val_curved = powf(val_norm, p);
+  int result = (int)(val_curved * 255.0f + 0.5f);
+  if (result > 255) result = 255;
+  if (result < 0) result = 0;
+  
+  return (byte)result;
 }
 
 // EEPROM領域の確認
@@ -386,6 +445,25 @@ void loop1() {  // core 0
   static bool heartbeat_flag = true;
   const byte heartbeat_speed = 32;
 
+  if (ledFlashCount > 0) {
+    byte r_val = (negReduceHandlePlay == 32) ? 255 : (negReduceHandlePlay * 8);
+    byte g_val = ledLx;
+    byte b_val = heartbeat_num;
+
+    // 点灯 (0.1秒)
+    pixels.setPixelColor(0, pixels.Color(r_val, g_val, b_val));
+    pixels.show();
+    delay(100);
+
+    // 消灯 (0.1秒)
+    pixels.setPixelColor(0, pixels.Color(0, 0, 0));
+    pixels.show();
+    delay(100);
+
+    ledFlashCount--;
+    return;
+  }
+
   switch (stickMode) {
     case MODE_STD:
       // 青色ベース（標準モード、無入力時は青）
@@ -481,6 +559,8 @@ void setup() {
   analogLxMax = restoreAnaDegMax();
   jogconDialMax = restorejogMax();
   negReduceHandlePlay = restoreNegReduceHandlePlay();
+  negLtCurve = restoreNegLtCurve();
+  negRtCurve = restoreNegRtCurve();
   
   stickMode = MODE_LOST;
   delay(300);
@@ -939,17 +1019,21 @@ void loop() {
                 if (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
                   // LTボタンとRTボタンを入れ替える (II = RT, L = LT)
                   uint16_t raw_rt = (uint16_t)l_b2 * 2;
-                  XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
+                  byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
+                  XboxButtonData.rt = applyAnalogCurve(rt_val, negLtCurve); // 物理IIボタンの補正を適用
 
                   uint16_t raw_lt = (uint16_t)l_bL * 2;
-                  XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
+                  byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
+                  XboxButtonData.lt = applyAnalogCurve(lt_val, negRtCurve); // 物理Lボタンの補正を適用
                 } else {
                   // 標準アサイン (II = LT, L = RT)
                   uint16_t raw_lt = (uint16_t)l_b2 * 2;
-                  XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
+                  byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
+                  XboxButtonData.lt = applyAnalogCurve(lt_val, negLtCurve);
 
                   uint16_t raw_rt = (uint16_t)l_bL * 2;
-                  XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
+                  byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
+                  XboxButtonData.rt = applyAnalogCurve(rt_val, negRtCurve);
                 }
               }
               // 通常時は右スティックをセンターに戻す
@@ -985,6 +1069,26 @@ void loop() {
             if (stickMode == MODE_SETTING_NEG) {
               uint16_t buttons = psx.getButtonWord();
               static uint16_t lastButtons = 0;
+
+              // L1 (Lボタン) で RT感度カーブを変更（物理Lボタン固定）
+              if ((buttons & PSB_L1) && !(lastButtons & PSB_L1)) {
+                negRtCurve = (negRtCurve + 1) % 4;
+                EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, negRtCurve);
+                EEPROM.commit();
+                Serial.print(F("NEG_ANALOG_RT_CURVE: "));
+                Serial.println(negRtCurve);
+                ledFlashCount = negRtCurve + 1;
+              }
+
+              // SQUARE (IIボタン) で LT感度カーブを変更（物理IIボタン固定）
+              if ((buttons & PSB_SQUARE) && !(lastButtons & PSB_SQUARE)) {
+                negLtCurve = (negLtCurve + 1) % 4;
+                EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, negLtCurve);
+                EEPROM.commit();
+                Serial.print(F("NEG_ANALOG_LT_CURVE: "));
+                Serial.println(negLtCurve);
+                ledFlashCount = negLtCurve + 1;
+              }
 
               // 十字キー上・下で遊び削減値を変更（エッジ検出）
               if ((buttons & PSB_PAD_UP) && !(lastButtons & PSB_PAD_UP)) {
@@ -1157,14 +1261,18 @@ void loop() {
                 // LT/RT スワップ (I = RT, II = LT)
                 uint16_t raw_rt = (uint16_t)l_b1 * 2;
                 uint16_t raw_lt = (uint16_t)l_b2 * 2;
-                XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
-                XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
+                byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
+                byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
+                XboxButtonData.rt = applyAnalogCurve(rt_val, negLtCurve); // 物理Iボタンの補正を適用
+                XboxButtonData.lt = applyAnalogCurve(lt_val, negRtCurve); // 物理IIボタンの補正を適用
               } else {
                 // 標準アサイン (I = LT, II = RT)
                 uint16_t raw_lt = (uint16_t)l_b1 * 2;
                 uint16_t raw_rt = (uint16_t)l_b2 * 2;
-                XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
-                XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
+                byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
+                byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
+                XboxButtonData.lt = applyAnalogCurve(lt_val, negLtCurve);
+                XboxButtonData.rt = applyAnalogCurve(rt_val, negRtCurve);
               }
             }
 
