@@ -954,6 +954,7 @@ void loop() {
 
             // 1. 各アナログ値の基本的なスケール・補正（毎フレーム確実に実行）
             l_x = (byte)adjustXY(l_x, lxMax);
+            byte lx_scaled_no_play = l_x; // デッドゾーン相殺前の値を保持
 
             // 遊びの削減（デッドゾーン相殺）の適用
             int lx_tmp = l_x;
@@ -981,7 +982,7 @@ void loop() {
 
             // アナログ操作によるメタモードのアクティブ化判定 (メニュー誤作動防止とメタモード有効化)
             if (metaState == META_STATE_START_PRESSED) {
-              if (abs((int)l_x - 128) > 10 || l_b1 > 10 || l_b2 > 10 || l_bL > 10) {
+              if (abs((int)lx_scaled_no_play - 128) > 32 || l_b1 > 20 || l_b2 > 20 || l_bL > 20) {
                 metaState = META_STATE_ACTIVE;
               }
             }
