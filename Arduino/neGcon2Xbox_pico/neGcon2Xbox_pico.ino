@@ -803,9 +803,11 @@ void loop() {
               if (buttons & PSB_R1)        { XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START;
                                              XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_RIGHT_SHOULDER; }
 
-              // I (Cross) = X
-              if (buttons & PSB_CROSS)
-                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_X;
+              // メタモード中、I(Cross)は II/Lボタンの機能切り替えに使用するため、
+              // デジタルボタンとしてのXボタンは送信しない。
+              // // I (Cross) = X
+              // if (buttons & PSB_CROSS)
+              //   XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_X;
 
               // SELECT = BACK
               if (buttons & PSB_SELECT)
@@ -861,9 +863,9 @@ void loop() {
           }
 
           if (psx.getLeftAnalog(lx_org, ly_org)) {
-            # // I/II button NORMAL mode (スワップ処理はトリガーマッピング側で実施)
-            b1_org = psx.getAnalogButton(PsxAnalogButton::PSAB_SQUARE);
-            b2_org = psx.getAnalogButton(PsxAnalogButton::PSAB_CROSS);
+             // I/II button NORMAL mode (スワップ処理はトリガーマッピング側で実施)
+             b1_org = psx.getAnalogButton(PsxAnalogButton::PSAB_CROSS);
+             b2_org = psx.getAnalogButton(PsxAnalogButton::PSAB_SQUARE);
 
             bL_org = psx.getAnalogButton(PsxAnalogButton::PSAB_L1);
 
@@ -897,25 +899,62 @@ void loop() {
             l_bL = l_bL * 1;
             if (l_bL > 0x7f) l_bL = 0x7f;
 
-            // 2. Xbox送信バッファへのアナログトリガー割り当て（毎フレーム確実に実行）
-            if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+            // アナログ操作によるメタモードのアクティブ化判定 (メニュー誤作動防止とメタモード有効化)
+            if (metaState == META_STATE_START_PRESSED) {
+              if (abs((int)l_x - 128) > 10 || l_b1 > 10 || l_b2 > 10 || l_bL > 10) {
+                metaState = META_STATE_ACTIVE;
+              }
+            }
+
+            // 2. Xbox送信バッファへのアナログトリガー・右スティック割り当て（毎フレーム確実に実行）
+            if (metaState == META_STATE_ACTIVE) {
               digitalWrite(PIN_CONNECT, LOW);
               
-              if (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
-                // LTボタンとRTボタンを入れ替える (I = RT, L = LT)
-                uint16_t raw_rt = (uint16_t)l_b1 * 2;
-                XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
+              // メタモード中はLT/RTは無効化 (0)
+              XboxButtonData.lt = 0;
+              XboxButtonData.rt = 0;
 
-                uint16_t raw_lt = (uint16_t)l_bL * 2;
-                XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
-              } else {
-                // 標準アサイン (I = LT, L = RT)
-                uint16_t raw_lt = (uint16_t)l_b1 * 2;
-                XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
+              // I (Cross) の押し込みでX/Y切り替え (遊び閾値10)
+              bool shift_Y = (l_b1 > 10);
 
-                uint16_t raw_rt = (uint16_t)l_bL * 2;
-                XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
+              // II (SQUARE) 増加側、L (L1) 減少側。同時押しは増加側 (II) 優先。
+              int16_t stick_val = 0;
+              if (l_b2 > 10) {
+                stick_val = (int16_t)(((int32_t)l_b2) * 32767 / 127);
+              } else if (l_bL > 10) {
+                stick_val = (int16_t)(((int32_t)l_bL) * -32768 / 127);
               }
+
+              if (shift_Y) {
+                XboxButtonData.r_y = stick_val;
+                XboxButtonData.r_x = 0;
+              } else {
+                XboxButtonData.r_x = stick_val;
+                XboxButtonData.r_y = 0;
+              }
+            } else {
+              if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+                digitalWrite(PIN_CONNECT, LOW);
+                
+                if (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+                  // LTボタンとRTボタンを入れ替える (II = RT, L = LT)
+                  uint16_t raw_rt = (uint16_t)l_b2 * 2;
+                  XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
+
+                  uint16_t raw_lt = (uint16_t)l_bL * 2;
+                  XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
+                } else {
+                  // 標準アサイン (II = LT, L = RT)
+                  uint16_t raw_lt = (uint16_t)l_b2 * 2;
+                  XboxButtonData.lt = (raw_lt > 255) ? 255 : raw_lt;
+
+                  uint16_t raw_rt = (uint16_t)l_bL * 2;
+                  XboxButtonData.rt = (raw_rt > 255) ? 255 : raw_rt;
+                }
+              }
+              // 通常時は右スティックをセンターに戻す
+              XboxButtonData.r_x = 0;
+              XboxButtonData.r_y = 0;
             }
 
             // 3. 値の変化があった時のみ LED 状態を更新（l_x や各ボタン値はすでに補正適用済み）
@@ -931,9 +970,16 @@ void loop() {
               ledBL = bL_org;
             }
 
-            // 最終的な値をセット (ハンドル)
-            XboxButtonData.l_x = (int16_t)(((int32_t)l_x - 128) * 32767 / 128);
-            XboxButtonData.l_y = 0;
+            // 最終的な値をセット (ハンドルねじり)
+            if (metaState == META_STATE_ACTIVE) {
+              // メタモード中はねじりを左アナログスティックのYに割り当て、Xは常にCenter
+              XboxButtonData.l_x = 0;
+              XboxButtonData.l_y = (int16_t)(((int32_t)l_x - 128) * 32767 / 128);
+            } else {
+              // 通常時はねじりを左アナログスティック of Xに割り当て、Yは常にCenter
+              XboxButtonData.l_x = (int16_t)(((int32_t)l_x - 128) * 32767 / 128);
+              XboxButtonData.l_y = 0;
+            }
 
             // 最大角、設定モード
             if (stickMode == MODE_SETTING_NEG) {
@@ -1083,8 +1129,8 @@ void loop() {
             b1_org = 0x00;
             b2_org = 0x00;
 
-            if (psx.getButtonWord() & PSB_SQUARE) b1_org = 0xff;
-            if (psx.getButtonWord() & PSB_CROSS) b2_org = 0xff;
+            if (psx.getButtonWord() & PSB_CROSS) b1_org = 0xff;
+            if (psx.getButtonWord() & PSB_SQUARE) b2_org = 0xff;
 
             l_b1 = b1_org / 2;
             l_b2 = b2_org / 2;
