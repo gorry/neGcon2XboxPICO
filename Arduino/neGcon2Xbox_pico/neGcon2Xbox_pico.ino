@@ -995,24 +995,28 @@ void loop() {
               XboxButtonData.lt = 0;
               XboxButtonData.rt = 0;
 
-              // I (Cross) の押し込みでX/Y切り替え (遊び閾値10)
-              bool shift_Y = (l_b1 > 10);
-
-              // II (SQUARE) 増加側、L (L1) 減少側。同時押しは増加側 (II) 優先。
+              // II/L による左スティックのY方向の操作（スワップ考慮・増加側優先）
               int16_t stick_val = 0;
-              if (l_b2 > 10) {
-                stick_val = (int16_t)(((int32_t)l_b2) * 32767 / 127);
-              } else if (l_bL > 10) {
-                stick_val = (int16_t)(((int32_t)l_bL) * -32768 / 127);
+              bool swapMode = (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT);
+
+              if (swapMode) {
+                // スワップ時：IIが増加側、Lが減少側
+                if (l_b2 > 10) {
+                  stick_val = (int16_t)(((int32_t)l_b2) * 32767 / 127);
+                } else if (l_bL > 10) {
+                  stick_val = (int16_t)(((int32_t)l_bL) * -32768 / 127);
+                }
+              } else {
+                // 標準時：Lが増加側、IIが減少側
+                if (l_bL > 10) {
+                  stick_val = (int16_t)(((int32_t)l_bL) * 32767 / 127);
+                } else if (l_b2 > 10) {
+                  stick_val = (int16_t)(((int32_t)l_b2) * -32768 / 127);
+                }
               }
 
-              if (shift_Y) {
-                XboxButtonData.r_y = stick_val;
-                XboxButtonData.r_x = 0;
-              } else {
-                XboxButtonData.r_x = stick_val;
-                XboxButtonData.r_y = 0;
-              }
+              XboxButtonData.l_y = stick_val;
+              XboxButtonData.l_x = 0; // 左スティックXはCenter
             } else {
               if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
                 digitalWrite(PIN_CONNECT, LOW);
@@ -1057,9 +1061,20 @@ void loop() {
 
             // 最終的な値をセット (ハンドルねじり)
             if (metaState == META_STATE_ACTIVE) {
-              // メタモード中はねじりを左アナログスティックのYに割り当て、Xは常にCenter
+              // メタモード中はねじりを右アナログスティックのX/Yに割り当て、左アナログスティックはCenter
+              // (※左スティックのYは、II/Lボタンの処理で設定された値を保持するため、ここでは上書きしない)
               XboxButtonData.l_x = 0;
-              XboxButtonData.l_y = (int16_t)(((int32_t)l_x - 128) * 32767 / 128);
+
+              // I (Cross) が押されていなければ右X、押されていれば右Y
+              bool shift_Y = (l_b1 > 10);
+              int16_t twist_val = (int16_t)(((int32_t)l_x - 128) * 32767 / 128);
+              if (shift_Y) {
+                XboxButtonData.r_y = twist_val;
+                XboxButtonData.r_x = 0;
+              } else {
+                XboxButtonData.r_x = twist_val;
+                XboxButtonData.r_y = 0;
+              }
             } else {
               // 通常時はねじりを左アナログスティック of Xに割り当て、Yは常にCenter
               XboxButtonData.l_x = (int16_t)(((int32_t)l_x - 128) * 32767 / 128);
