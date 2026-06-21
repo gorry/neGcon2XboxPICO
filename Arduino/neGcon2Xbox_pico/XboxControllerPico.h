@@ -2,6 +2,51 @@
 
 #include <stdint.h>
 #include "Arduino.h"
+#include <stdarg.h>
+
+class DummySerial {
+public:
+  void begin(unsigned long baud) {
+    Serial1.begin(baud);
+  }
+  void print(const __FlashStringHelper *ifsh) { Serial1.print(ifsh); }
+  void print(const String &s) { Serial1.print(s); }
+  void print(const char str[]) { Serial1.print(str); }
+  void print(char c) { Serial1.print(c); }
+  void print(unsigned char b, int base = 10) { Serial1.print(b, base); }
+  void print(int n, int base = 10) { Serial1.print(n, base); }
+  void print(unsigned int n, int base = 10) { Serial1.print(n, base); }
+  void print(long n, int base = 10) { Serial1.print(n, base); }
+  void print(unsigned long n, int base = 10) { Serial1.print(n, base); }
+  void print(double n, int digits = 2) { Serial1.print(n, digits); }
+  
+  void println(const __FlashStringHelper *ifsh) { Serial1.println(ifsh); }
+  void println(const String &s) { Serial1.println(s); }
+  void println(const char str[]) { Serial1.println(str); }
+  void println(char c) { Serial1.println(c); }
+  void println(unsigned char b, int base = 10) { Serial1.println(b, base); }
+  void println(int n, int base = 10) { Serial1.println(n, base); }
+  void println(unsigned int n, int base = 10) { Serial1.println(n, base); }
+  void println(long n, int base = 10) { Serial1.println(n, base); }
+  void println(unsigned long n, int base = 10) { Serial1.println(n, base); }
+  void println(double n, int digits = 2) { Serial1.println(n, digits); }
+  void println(void) { Serial1.println(); }
+  
+  void printf(const char* format, ...) {
+    char buf[256];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+    Serial1.print(buf);
+  }
+  
+  operator bool() { return true; }
+};
+
+extern DummySerial Serial_Dummy;
+#define Serial Serial_Dummy
+
 #ifndef CFG_TUSB_RHPORT0_MODE
 #define CFG_TUSB_RHPORT0_MODE 1
 #endif
@@ -48,3 +93,7 @@ extern ReportDataXinput_t XboxButtonData;
 void xboxcontroller_init(void);
 void xboxcontroller_reset(void);
 bool xboxcontroller_send_report(void);
+
+extern bool usb_mode_msc;
+extern bool config_file_writing;
+void xboxcontroller_reconnect(bool as_msc);

@@ -10,41 +10,46 @@
 
 #include "Arduino.h"
 
-  // XInput モードでは CDC (Serial) インターフェースが消滅するため、Serial への書き込みによるフリーズを防ぐために強制ダミー化します
-#define Serial Serial_Dummy
-class DummySerial {
-public:
-  void begin(unsigned long baud) {}
-  void print(const __FlashStringHelper *ifsh) {}
-  void print(const String &s) {}
-  void print(const char str[]) {}
-  void print(char c) {}
-  void print(unsigned char b, int base = 10) {}
-  void print(int n, int base = 10) {}
-  void print(unsigned int n, int base = 10) {}
-  void print(long n, int base = 10) {}
-  void print(unsigned long n, int base = 10) {}
-  void print(double n, int digits = 2) {}
-  void println(const __FlashStringHelper *ifsh) {}
-  void println(const String &s) {}
-  void println(const char str[]) {}
-  void println(char c) {}
-  void println(unsigned char b, int base = 10) {}
-  void println(int n, int base = 10) {}
-  void println(unsigned int n, int base = 10) {}
-  void println(long n, int base = 10) {}
-  void println(unsigned long n, int base = 10) {}
-  void println(double n, int digits = 2) {}
-  void println(void) {}
-  operator bool() { return true; }
-};
-static DummySerial Serial_Dummy;
+#include "hardware/watchdog.h"
 
 #include <SPI.h>
 #include "PsxControllerPICO_HwSpi2.h"
 #include "XboxControllerPico.h"
+DummySerial Serial_Dummy;
 #include <Adafruit_NeoPixel.h>
 #include <EEPROM.h>
+#include <FatFS.h>
+#include "InifileTemplate.h"
+
+extern uint8_t _FS_start;
+extern uint8_t _FS_end;
+bool fs_ready = false;
+volatile bool flash_busy = false;
+volatile bool setup_done = false;
+
+#if !defined(CFG_TUD_MSC) || (CFG_TUD_MSC == 0)
+#error "CFG_TUD_MSC is not defined or is 0! TinyUSB MSC stack is disabled!"
+#endif
+
+// 前方宣言
+void saveConfig();
+void loadConfig();
+void migrateOrInitConfig();
+
+// ConfigEEPROMWrapperの定義 (本物の EEPROM を使用)
+static auto& RealEEPROM = ::EEPROM;
+
+class ConfigEEPROMWrapper {
+public:
+  void begin(size_t size) { RealEEPROM.begin(size); }
+  uint8_t read(int address) { return RealEEPROM.read(address); }
+  void write(int address, uint8_t value) { RealEEPROM.write(address, value); }
+  bool commit();
+};
+static ConfigEEPROMWrapper ConfigEEPROM;
+
+// 既存コードの EEPROM 呼び出しをラッパーに置き換える
+#define EEPROM ConfigEEPROM
 
 // EEPROMの設定
 
@@ -59,6 +64,7 @@ static DummySerial Serial_Dummy;
 #define EEPADR_NEG_REDUCE_HANDLE_PLAY 8
 #define EEPADR_NEG_ANALOG_LT_CURVE 9
 #define EEPADR_NEG_ANALOG_RT_CURVE 10
+#define EEPADR_BOOT_ATTEMPT_COUNT 15
 
 // アナログカーブの定義
 #define NEG_ANALOG_CURVE_LINEAR 0
@@ -434,13 +440,16 @@ void keyConvert_psx2xbox() {
 
 // CPU1では、NeoPixel LEDの点灯処理をさせる
 void setup1() {  // core 0
-  pixels.begin();
-  pinMode(NEO_PWR, OUTPUT);
-  digitalWrite(NEO_PWR, HIGH);
-  delay(1000);
+  while (!setup_done) {
+    delay(50);
+  }
 }
 
 void loop1() {  // core 0
+  if (usb_mode_msc || flash_busy) {
+    delay(100);
+    return;
+  }
   static byte heartbeat_num = 0;
   static bool heartbeat_flag = true;
   const byte heartbeat_speed = 32;
@@ -536,40 +545,376 @@ void loop1() {  // core 0
   delay(50); // Sub core の無駄な CPU 占有とバス負荷を軽減するためのウェイト
 }
 
+// =========================================================================
+// CONFIG.INI ファイル処理の実装
+// =========================================================================
+
+bool ConfigEEPROMWrapper::commit() {
+  if (!fs_ready) {
+    uint32_t ints = save_and_disable_interrupts();
+    bool core1_active = setup_done;
+    if (core1_active) {
+      rp2040.idleOtherCore();
+    }
+    bool res = RealEEPROM.commit();
+    if (core1_active) {
+      rp2040.resumeOtherCore();
+    }
+    restore_interrupts(ints);
+    return res;
+  }
+  // ファイルシステム動作時はEEPROM.commit()を実行せずフリーズを防止
+  saveConfig();
+  return true;
+}
+
+void saveConfig() {
+  if (!fs_ready) return;
+  bool core1_active = setup_done;
+  if (core1_active) {
+    rp2040.idleOtherCore();
+  }
+  flash_busy = true; // Core 1 の動作を一時停止
+  delay(10);
+  config_file_writing = true;
+  File file = FatFS.open("/CONFIG.INI", "w");
+  if (!file) {
+    config_file_writing = false;
+    flash_busy = false;
+    if (core1_active) {
+      rp2040.resumeOtherCore();
+    }
+    return;
+  }
+
+  file.println(F("[neGcon]"));
+  file.println(F("; neGcon2Xbox_pico CONFIGURATION FILE"));
+  file.println();
+  file.println(F("; RT/LT analog sensitivity curve (0: LINEAR, 1: A1 (p=2.0), 2: A2 (p=4.0), 3: A3 (p=6.0))"));
+  file.print(F("negLtCurve=")); file.println(negLtCurve);
+  file.print(F("negRtCurve=")); file.println(negRtCurve);
+  file.println();
+  file.println(F("; Twist play reduction (deadzone compensation) value (0 to 32)"));
+  file.print(F("negReduceHandlePlay=")); file.println(negReduceHandlePlay);
+  file.println();
+  file.println(F("; Twist max angle calibration value (1 to 255)"));
+  file.print(F("negTwistMax=")); file.println(lxMax);
+  file.println();
+  file.println(F("; Jogcon Dial max position calibration value (8 to 500)"));
+  file.print(F("jogconDialMax=")); file.println(jogconDialMax);
+  file.println();
+  file.println(F("; Controller operation mode (0: STD, 1: SWAPAB, 2: SWAPLTRT, 3: SWAPAB_SWAPLTRT)"));
+  file.print(F("stickMode=")); file.println(stickMode);
+  file.println();
+  file.println(F("; Analog stick max calibration value (128 to 255)"));
+  file.print(F("analogLxMax=")); file.println(analogLxMax);
+
+  file.close();
+  config_file_writing = false;
+  flash_busy = false; // Core 1 の動作を再開
+  if (core1_active) {
+    rp2040.resumeOtherCore();
+  }
+}
+
+void loadConfig() {
+
+
+  if (!fs_ready) {
+    // FATFS が使えない場合は、本物の EEPROM からロードする
+    negLtCurve = restoreNegLtCurve();
+    negRtCurve = restoreNegRtCurve();
+    negReduceHandlePlay = restoreNegReduceHandlePlay();
+    lxMax = restoreNegDegMax();
+    analogLxMax = restoreAnaDegMax();
+    jogconDialMax = restorejogMax();
+    stickMode = restoreNegStickMode();
+    return;
+  }
+
+
+
+  // ファイルが存在しない場合は、まず作成する (無限再帰を防ぐ)
+  if (!FatFS.exists("/CONFIG.INI")) {
+    migrateOrInitConfig(); // ここで初期ファイルが作成される
+  }
+
+
+
+  File file = FatFS.open("/CONFIG.INI", "r");
+  if (!file) {
+    // それでもファイルが開けない場合は、本物の EEPROM からロードして諦める (再帰はしない)
+    negLtCurve = restoreNegLtCurve();
+    negRtCurve = restoreNegRtCurve();
+    negReduceHandlePlay = restoreNegReduceHandlePlay();
+    lxMax = restoreNegDegMax();
+    analogLxMax = restoreAnaDegMax();
+    jogconDialMax = restorejogMax();
+    stickMode = restoreNegStickMode();
+    return;
+  }
+
+  // 安全弁：破損などによりファイルサイズが異常に大きい、または小さすぎる場合は削除してフォールバック
+  if (file.size() < 50 || file.size() > 4096) {
+    file.close();
+    FatFS.remove("/CONFIG.INI");
+    negLtCurve = restoreNegLtCurve();
+    negRtCurve = restoreNegRtCurve();
+    negReduceHandlePlay = restoreNegReduceHandlePlay();
+    lxMax = restoreNegDegMax();
+    analogLxMax = restoreAnaDegMax();
+    jogconDialMax = restorejogMax();
+    stickMode = restoreNegStickMode();
+    return;
+  }
+
+
+
+  bool updated = false;
+  int loopCount = 0;
+  while (file.available()) {
+    loopCount++;
+    String line = file.readStringUntil('\n');
+
+    line.trim();
+    if (line.startsWith(";") || line.startsWith("[") || line.length() == 0) {
+      continue;
+    }
+    int eqIdx = line.indexOf('=');
+    if (eqIdx > 0) {
+      String key = line.substring(0, eqIdx);
+      String val = line.substring(eqIdx + 1);
+      key.trim();
+      val.trim();
+
+      int intVal = val.toInt();
+      if (key == "negLtCurve" && negLtCurve != (byte)intVal) {
+        negLtCurve = (byte)intVal;
+        updated = true;
+      } else if (key == "negRtCurve" && negRtCurve != (byte)intVal) {
+        negRtCurve = (byte)intVal;
+        updated = true;
+      } else if (key == "negReduceHandlePlay" && negReduceHandlePlay != (byte)intVal) {
+        negReduceHandlePlay = (byte)intVal;
+        updated = true;
+      } else if (key == "negTwistMax" && lxMax != (byte)intVal) {
+        lxMax = (byte)intVal;
+        updated = true;
+      } else if (key == "jogconDialMax" && jogconDialMax != (short)intVal) {
+        jogconDialMax = (short)intVal;
+        updated = true;
+      } else if (key == "stickMode" && stickMode != (byte)intVal) {
+        stickMode = (byte)intVal;
+        updated = true;
+      } else if (key == "analogLxMax" && analogLxMax != (byte)intVal) {
+        analogLxMax = (byte)intVal;
+        updated = true;
+      }
+    }
+
+    // 無限ループ対策
+    if (loopCount > 100) {
+      break;
+    }
+  }
+  file.close();
+
+
+
+  // ファイルシステム読み込み完了後、既存コード内のEEPROM.read()との互換性のためRAMバッファにミラー同期しておく
+  if (fs_ready) {
+    ::EEPROM.write(EEPADR_NEGMODE, stickMode);
+    ::EEPROM.write(EEPADR_NEG_NEGMAX, lxMax);
+    ::EEPROM.write(EEPADR_ANALOG_STICKMAX, analogLxMax);
+    ::EEPROM.write(EEPADR_JOG_MAX_U, (byte)(jogconDialMax >> 8));
+    ::EEPROM.write(EEPADR_JOG_MAX_L, (byte)(jogconDialMax & 0x00ff));
+    ::EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1); // ゲタ（+1）
+    ::EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, negLtCurve);
+    ::EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, negRtCurve);
+  }
+
+  // フェールセーフとして、PCから書き換えられた値をEEPROMバックアップ側にも同期保存する
+  // (ただし、ファイルシステムが無効なフォールバック時のみ実行し、ファイルシステム動作時はフリーズ防止のため実行しない)
+  if (updated && !fs_ready) {
+    uint32_t ints = save_and_disable_interrupts();
+    bool core1_active = setup_done;
+    if (core1_active) {
+      rp2040.idleOtherCore();
+    }
+    ::EEPROM.write(0, 'c');
+    ::EEPROM.write(1, 'f');
+    ::EEPROM.write(2, '1');
+    ::EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, negLtCurve);
+    ::EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, negRtCurve);
+    ::EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1); // ゲタ（+1）
+    ::EEPROM.write(EEPADR_NEG_NEGMAX, lxMax);
+    ::EEPROM.write(EEPADR_JOG_MAX_U, (byte)(jogconDialMax >> 8));
+    ::EEPROM.write(EEPADR_JOG_MAX_L, (byte)(jogconDialMax & 0x00ff));
+    ::EEPROM.commit();
+    if (core1_active) {
+      rp2040.resumeOtherCore();
+    }
+    restore_interrupts(ints);
+  }
+}
+
+void migrateOrInitConfig() {
+  if (!fs_ready) return;
+
+  if (eepromCheck() == true) {
+    negLtCurve = restoreNegLtCurve();
+    negRtCurve = restoreNegRtCurve();
+    negReduceHandlePlay = restoreNegReduceHandlePlay();
+    lxMax = restoreNegDegMax();
+    analogLxMax = restoreAnaDegMax();
+    jogconDialMax = restorejogMax();
+    stickMode = restoreNegStickMode();
+    saveConfig();
+  } else {
+    // 無ければ CONFIG.INI をテンプレートから生成
+    File file = FatFS.open("/CONFIG.INI", "w");
+    if (file) {
+      const char* p = CONFIG_INI_TEMPLATE;
+      while (true) {
+        char c = pgm_read_byte(p++);
+        if (c == 0) break;
+        file.write((uint8_t)c); // uint8_tにキャストして型解決エラーを回避
+      }
+      file.close();
+    }
+  }
+}
+
 void setup() {
+  // 最初に NeoPixel を起動し、Core 0 側で初期化する
+  pinMode(NEO_PWR, OUTPUT);
+  digitalWrite(NEO_PWR, HIGH);
+  pixels.begin();
+
+  Serial.begin(115200);
+  delay(500); // シリアルが安定するのを少し待つ
+  Serial.printf("\n[%lu] --- setup start ---\n", millis());
+
+  // (セットアップ中の他コア一時停止は個別関数内のみに縮小)
+
+  // スクラッチレジスタによる起動モード判定
+  uint32_t boot_magic = watchdog_hw->scratch[0];
+  watchdog_hw->scratch[0] = 0; // 読み取ったら即座にクリアしてループを防ぐ
+  Serial.printf("[%lu] boot_magic = 0x%08X\n", millis(), boot_magic);
+  if (boot_magic == 0xAB0057C0) {
+    usb_mode_msc = true;
+    Serial.printf("[%lu] Mode: USB MSC (Mass Storage Class)\n", millis());
+  } else {
+    usb_mode_msc = false;
+    Serial.printf("[%lu] Mode: Normal Controller (XInput)\n", millis());
+  }
+
   // 安全に USB XInput を初期化（No USBモードの TinyUSB 起動）
   xboxcontroller_init();
   xboxcontroller_reset();
 
-  // 基板のステータスLEDの初期化
-  pinMode(PIN_CONNECT, OUTPUT);
-  pinMode(PIN_ERRORLED, OUTPUT);
-  pinMode(PIN_GOODLED, OUTPUT);
+  // 本物の EEPROM の初期化（移行チェック用）
+  RealEEPROM.begin(EEPROMSIZE);
 
-  // 初期状態: LED消灯 (Active Low)
-  digitalWrite(PIN_CONNECT, HIGH);
-  digitalWrite(PIN_ERRORLED, HIGH);
-  digitalWrite(PIN_GOODLED, HIGH);
+  // 起動試行カウンタによる安全フォーマット機能
+  byte attempts = RealEEPROM.read(EEPADR_BOOT_ATTEMPT_COUNT);
+  if (attempts == 255) attempts = 0; // 初期値（未初期化）なら0にする
+  attempts++;
+  RealEEPROM.write(EEPADR_BOOT_ATTEMPT_COUNT, attempts);
+  RealEEPROM.commit();
+  Serial.printf("Setup attempt count: %u\n", attempts);
 
-  // EEPROMの初期化と復元（ハードウェアSPIは完全に無効化し、ソフトウェアBit-Bangを使用）
-  EEPROM.begin(EEPROMSIZE);
-  if (eepromCheck() != true) eepromFormat();
+  if (attempts >= 5) {
+    Serial.println(F("Too many setup failures! Formatting Flash FS..."));
+    for (int i = 0; i < 10; i++) {
+      pixels.setPixelColor(0, pixels.Color(255, 0, 0)); pixels.show(); delay(100);
+      pixels.setPixelColor(0, pixels.Color(0, 0, 0)); pixels.show(); delay(100);
+    }
+    FatFS.format();
+    RealEEPROM.write(EEPADR_BOOT_ATTEMPT_COUNT, 0);
+    RealEEPROM.commit();
+    Serial.println(F("Format done. Reconnect..."));
+    xboxcontroller_reconnect(false);
+  }
 
-  lxMax = restoreNegDegMax();
-  analogLxMax = restoreAnaDegMax();
-  jogconDialMax = restorejogMax();
-  negReduceHandlePlay = restoreNegReduceHandlePlay();
-  negLtCurve = restoreNegLtCurve();
-  negRtCurve = restoreNegRtCurve();
-  
+  // FATファイルシステムのマウント (FSサイズが0の場合はスキップしてハングアップを回避)
+  fs_ready = false;
+  uint32_t fs_size = (uint32_t)&_FS_end - (uint32_t)&_FS_start;
+  Serial.printf("[%lu] FS Start: 0x%08X, End: 0x%08X, Size: %u bytes\n", millis(), (uint32_t)&_FS_start, (uint32_t)&_FS_end, fs_size);
+  if (fs_size >= 65536) {
+    Serial.printf("[%lu] Calling FatFS.begin()...\n", millis());
+    if (FatFS.begin()) {
+      Serial.printf("[%lu] FatFS.begin() SUCCESS.\n", millis());
+      fs_ready = true;
+    } else {
+      Serial.printf("[%lu] FatFS.begin() FAILED. Formatting...\n", millis());
+      if (FatFS.format()) {
+        Serial.printf("[%lu] FatFS.format() SUCCESS. Retrying begin()...\n", millis());
+        if (FatFS.begin()) {
+          Serial.printf("[%lu] FatFS.begin() SUCCESS after format.\n", millis());
+          fs_ready = true;
+        } else {
+          Serial.printf("[%lu] FatFS.begin() FAILED after format.\n", millis());
+        }
+      } else {
+        Serial.printf("[%lu] FatFS.format() FAILED.\n", millis());
+      }
+    }
+  } else {
+    Serial.println(F("FS size is too small, skipping FatFS.begin()."));
+  }
+
+  // 設定ファイルのロード (通常コントローラーモード時のみロードし、MSCモード時はスキップしてフリーズを防ぐ)
+  if (!usb_mode_msc) {
+    loadConfig();
+  }
+
+  // (他コア再開処理を削除)
+
   stickMode = MODE_LOST;
   delay(300);
 
-  Serial.begin(115200);
-  Serial.println(F("Ready (Xbox XInput Mode)!"));
+  Serial.printf("[%lu] Ready (Xbox XInput Mode)!\n", millis());
+
+  // 【セットアップ完了】水色を点灯したままにして Core 1 の待機を解除する
+  // (消灯せず水色で静止させることで、セットアップが無事終わったことを確認可能にします)
+  pixels.setPixelColor(0, pixels.Color(0, 255, 255));
+  pixels.show();
+  setup_done = true;
+  // セットアップが無事完了したので、起動試行カウンタをリセット
+  RealEEPROM.write(EEPADR_BOOT_ATTEMPT_COUNT, 0);
+  RealEEPROM.commit();
 }
 
 void loop() {
+  if (usb_mode_msc) {
+    tud_task();
+    if (BOOTSEL) {
+      xboxcontroller_reconnect(false); // 通常コントローラーモードへ復帰
+    }
+    delay(1);
+    return;
+  }
+
+  static byte lastStickMode = MODE_LOST;
+
+  // 設定モードの突入・離脱に伴う USB 動的再マウント制御
+  if (stickMode != lastStickMode) {
+    if (stickMode == MODE_SETTING_NEG) {
+      // 通常モードで動作中、かつFSが利用可能な場合のみUSBメモリモードへリブート
+      if (!usb_mode_msc && fs_ready) {
+        FatFS.end();                     // Pico側のマウントを解除してPCとの排他を確保
+        xboxcontroller_reconnect(true);  // USB MSCモードへ
+      }
+    } else if (lastStickMode == MODE_SETTING_NEG) {
+      // USBメモリモードで起動中だった場合のみ、通常モードへリブートして復帰
+      if (usb_mode_msc) {
+        xboxcontroller_reconnect(false); // 通常コントローラーモードへ復帰
+      }
+    }
+    lastStickMode = stickMode;
+  }
+
   // TinyUSBデバイススタックのタスク処理を最優先で巡回させる
   tud_task();
 
@@ -616,7 +961,7 @@ void loop() {
       }
       if (sBootSel == 374) {
         if ((OldpsxStickMode == PSPROTO_NEGCON) || (OldpsxStickMode == PSPROTO_JOGCON) || (OldpsxStickMode == PSPROTO_FLIGHTSTICK)) {
-          Serial.println(F("Set Config mode"));
+          Serial.printf("[%lu] Set Config mode\n", millis());
           changeNegStickMode = false;
           beforeStickMode = stickMode;
           stickMode = MODE_SETTING_NEG;
@@ -654,6 +999,7 @@ void loop() {
     // コントローラー未検出時は1秒間隔で探索（USB列挙処理への干渉を防ぐ）
     if (now - lastSearchTime >= 1000) {
       lastSearchTime = now;
+      Serial.printf("Searching for controller... (now: %lu)\n", now);
       if (psx.begin()) {
         Serial.println(F("Controller found!"));
         delay(300);
