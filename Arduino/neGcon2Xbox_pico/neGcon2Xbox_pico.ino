@@ -94,6 +94,7 @@ static ConfigEEPROMWrapper ConfigEEPROM;
 
 #define MODE_AIRCON22 10
 
+#define MODE_USB_MSC 97
 #define MODE_SETTING_NEG 98
 #define MODE_LOST 99
 
@@ -552,14 +553,7 @@ void loop1() {  // core 0
 bool ConfigEEPROMWrapper::commit() {
   if (!fs_ready) {
     uint32_t ints = save_and_disable_interrupts();
-    bool core1_active = setup_done;
-    if (core1_active) {
-      rp2040.idleOtherCore();
-    }
     bool res = RealEEPROM.commit();
-    if (core1_active) {
-      rp2040.resumeOtherCore();
-    }
     restore_interrupts(ints);
     return res;
   }
@@ -570,10 +564,6 @@ bool ConfigEEPROMWrapper::commit() {
 
 void saveConfig() {
   if (!fs_ready) return;
-  bool core1_active = setup_done;
-  if (core1_active) {
-    rp2040.idleOtherCore();
-  }
   flash_busy = true; // Core 1 の動作を一時停止
   delay(10);
   config_file_writing = true;
@@ -581,9 +571,6 @@ void saveConfig() {
   if (!file) {
     config_file_writing = false;
     flash_busy = false;
-    if (core1_active) {
-      rp2040.resumeOtherCore();
-    }
     return;
   }
 
@@ -612,9 +599,6 @@ void saveConfig() {
   file.close();
   config_file_writing = false;
   flash_busy = false; // Core 1 の動作を再開
-  if (core1_active) {
-    rp2040.resumeOtherCore();
-  }
 }
 
 void loadConfig() {
@@ -737,10 +721,6 @@ void loadConfig() {
   // (ただし、ファイルシステムが無効なフォールバック時のみ実行し、ファイルシステム動作時はフリーズ防止のため実行しない)
   if (updated && !fs_ready) {
     uint32_t ints = save_and_disable_interrupts();
-    bool core1_active = setup_done;
-    if (core1_active) {
-      rp2040.idleOtherCore();
-    }
     ::EEPROM.write(0, 'c');
     ::EEPROM.write(1, 'f');
     ::EEPROM.write(2, '1');
@@ -751,9 +731,6 @@ void loadConfig() {
     ::EEPROM.write(EEPADR_JOG_MAX_U, (byte)(jogconDialMax >> 8));
     ::EEPROM.write(EEPADR_JOG_MAX_L, (byte)(jogconDialMax & 0x00ff));
     ::EEPROM.commit();
-    if (core1_active) {
-      rp2040.resumeOtherCore();
-    }
     restore_interrupts(ints);
   }
 }
@@ -803,6 +780,7 @@ void setup() {
   Serial.printf("[%lu] boot_magic = 0x%08X\n", millis(), boot_magic);
   if (boot_magic == 0xAB0057C0) {
     usb_mode_msc = true;
+    stickMode = MODE_USB_MSC;
     Serial.printf("[%lu] Mode: USB MSC (Mass Storage Class)\n", millis());
   } else {
     usb_mode_msc = false;
@@ -871,7 +849,9 @@ void setup() {
 
   // (他コア再開処理を削除)
 
-  stickMode = MODE_LOST;
+  if (!usb_mode_msc) {
+    stickMode = MODE_LOST;
+  }
   delay(300);
 
   Serial.printf("[%lu] Ready (Xbox XInput Mode)!\n", millis());
@@ -896,24 +876,7 @@ void loop() {
     return;
   }
 
-  static byte lastStickMode = MODE_LOST;
 
-  // 設定モードの突入・離脱に伴う USB 動的再マウント制御
-  if (stickMode != lastStickMode) {
-    if (stickMode == MODE_SETTING_NEG) {
-      // 通常モードで動作中、かつFSが利用可能な場合のみUSBメモリモードへリブート
-      if (!usb_mode_msc && fs_ready) {
-        FatFS.end();                     // Pico側のマウントを解除してPCとの排他を確保
-        xboxcontroller_reconnect(true);  // USB MSCモードへ
-      }
-    } else if (lastStickMode == MODE_SETTING_NEG) {
-      // USBメモリモードで起動中だった場合のみ、通常モードへリブートして復帰
-      if (usb_mode_msc) {
-        xboxcontroller_reconnect(false); // 通常コントローラーモードへ復帰
-      }
-    }
-    lastStickMode = stickMode;
-  }
 
   // TinyUSBデバイススタックのタスク処理を最優先で巡回させる
   tud_task();
@@ -1174,11 +1137,7 @@ void loop() {
           // 最大角、設定モード
           if (stickMode == MODE_SETTING_NEG) {
             if (psx.getButtonWord() & PSB_START) {
-              l_x_tmp = 255;
-              analogLxMax = (byte)l_x_tmp;
-              Serial.println(F("EEP Write!"));
-              EEPROM.write(EEPADR_ANALOG_STICKMAX, analogLxMax);
-              EEPROM.commit();
+              xboxcontroller_reconnect(true); // MSCモードへ移行（リセット）
             }
             if (psx.getButtonWord() & PSB_CIRCLE) {
               Serial.print(F("Analog lxMax before: "));
@@ -1472,17 +1431,7 @@ void loop() {
                 }
               }
               if ((buttons & PSB_START) && !(lastButtons & PSB_START)) {
-                negReduceHandlePlay = 16;
-                EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1); // ゲタ（+1）をはかせて保存
-                l_x_tmp = 0xff / ((NEG_CALIB - 1) / 2 + 1);
-                lxMax = (byte)l_x_tmp;
-                EEPROM.write(EEPADR_NEG_NEGMAX, lxMax);
-                EEPROM.commit();
-                Serial.print(F("NEG_REDUCE_HANDLE_PLAY: "));
-                Serial.println(negReduceHandlePlay);
-                Serial.print(F("neG lxMax after: "));
-                Serial.println(lxMax);
-                stickMode = beforeStickMode;
+                xboxcontroller_reconnect(true); // MSCモードへ移行（リセット）
               }
               if ((buttons & PSB_CIRCLE) && !(lastButtons & PSB_CIRCLE)) {
                 Serial.print(F("neG lxMax before: "));
@@ -1657,11 +1606,7 @@ void loop() {
                 }
               } else {
                 if (psx.getButtonWord() & PSB_START) {
-                  jogconDialMax = 100;
-                  EEPROM.write(EEPADR_JOG_MAX_U, (byte)(jogconDialMax >> 8));
-                  EEPROM.write(EEPADR_JOG_MAX_L, (byte)(jogconDialMax & 0x00ff));
-                  EEPROM.commit();
-                  stickMode = beforeStickMode;
+                  xboxcontroller_reconnect(true); // MSCモードへ移行（リセット）
                 }
                 if (psx.getButtonWord() & PSB_CIRCLE) {
                   Serial.print(F("Jogcon jogconDialMax before: "));
