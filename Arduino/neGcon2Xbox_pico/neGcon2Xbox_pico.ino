@@ -71,9 +71,10 @@ static ConfigEEPROMWrapper ConfigEEPROM;
 #define NEG_ANALOG_CURVE_A1     1
 #define NEG_ANALOG_CURVE_A2     2
 #define NEG_ANALOG_CURVE_A3     3
+#define NEG_ANALOG_CURVE_MAX    4
 
 // neGcon ハンドルアナログ値の補正 これ以上の補正が必要な場合は、設定→ボタン→こだわりのボタン設定→感度設定を弄ってください。
-#define NEG_CALIB 1.1
+#define NEG_CALIB 1.0
 
 // neGcon ボタン アナログ値の補正 これ以上の補正が必要な場合は、設定→ボタン→こだわりのボタン設定→感度設定を弄ってください。
 #define NEG_CALIB_B 1.0
@@ -98,6 +99,7 @@ static ConfigEEPROMWrapper ConfigEEPROM;
 #define MODE_SETTING_NEG 98
 #define MODE_LOST 99
 
+#define MAX_NEG_REDUCE_HANDLE_PLAY 32
 
 /** \brief Pin used for Controller Attention (ATTN)
  */
@@ -162,15 +164,14 @@ const char* const controllerProtoStrings[PSPROTO_MAX + 1] PROGMEM = {
   ctrlTypeOutOfBounds
 };
 
-byte ledLx, ledLy, ledRx, ledRy, ledB1, ledB2, ledBL;
-byte stickMode;
-byte lxMax;
-byte analogLxMax;
-short jogconDialMax;
-byte negReduceHandlePlay = 16;
-byte negLtCurve = NEG_ANALOG_CURVE_LINEAR;
-byte negRtCurve = NEG_ANALOG_CURVE_LINEAR;
-volatile int ledFlashCount = 0;
+// デフォルト設定値の定義
+const byte DEFAULT_NEG_LT_CURVE = NEG_ANALOG_CURVE_LINEAR; // 0
+const byte DEFAULT_NEG_RT_CURVE = NEG_ANALOG_CURVE_LINEAR; // 0
+const byte DEFAULT_NEG_REDUCE_HANDLE_PLAY = 16;            // EEPROMゲタなし16 (EEPROM書き込み時は+1して17)
+const byte DEFAULT_NEG_TWIST_MAX = 242;                    // 255 / ((NEG_CALIB - 1) / 2 + 1)
+const short DEFAULT_JOGCON_DIAL_MAX = 100;
+const byte DEFAULT_STICK_MODE = MODE_STD;                  // 0
+const byte DEFAULT_ANALOG_LX_MAX = 255;
 
 // STARTメタキー機能のための状態定義
 enum MetaKeyState {
@@ -195,6 +196,15 @@ static byte jogxForcePower = 0;
 static byte jogxPosResetEnable = 0;
 static PsxControllerType psxContType = PSCTRL_UNKNOWN;
 static PsxControllerProtocol OldpsxStickMode = PSPROTO_UNKNOWN;
+static byte ledLx, ledLy, ledRx, ledRy, ledB1, ledB2, ledBL;
+static byte stickMode = DEFAULT_STICK_MODE;
+static byte lxMax = DEFAULT_NEG_TWIST_MAX;
+static byte analogLxMax = DEFAULT_ANALOG_LX_MAX;
+static short jogconDialMax = DEFAULT_JOGCON_DIAL_MAX;
+static byte negReduceHandlePlay = DEFAULT_NEG_REDUCE_HANDLE_PLAY;
+static byte negLtCurve = DEFAULT_NEG_LT_CURVE;
+static byte negRtCurve = DEFAULT_NEG_RT_CURVE;
+static volatile int ledFlashCount = 0;
 
 /// <summary>
 /// EEPROMの初期設定と全領域のクリア
@@ -207,14 +217,14 @@ void eepromFormat() {
   EEPROM.write(0, 'c');
   EEPROM.write(1, 'f');
   EEPROM.write(2, '1');
-  EEPROM.write(EEPADR_NEGMODE, MODE_STD);
-  EEPROM.write(EEPADR_NEG_NEGMAX, 255 / ((NEG_CALIB - 1) / 2 + 1));
-  EEPROM.write(EEPADR_ANALOG_STICKMAX, 255);
-  EEPROM.write(EEPADR_JOG_MAX_U, 0);
-  EEPROM.write(EEPADR_JOG_MAX_L, 100);
-  EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, 17); // ゲタ（+1）をはかせて初期値16を保存
-  EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, NEG_ANALOG_CURVE_LINEAR);
-  EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, NEG_ANALOG_CURVE_LINEAR);
+  EEPROM.write(EEPADR_NEGMODE, DEFAULT_STICK_MODE);
+  EEPROM.write(EEPADR_NEG_NEGMAX, DEFAULT_NEG_TWIST_MAX);
+  EEPROM.write(EEPADR_ANALOG_STICKMAX, DEFAULT_ANALOG_LX_MAX);
+  EEPROM.write(EEPADR_JOG_MAX_U, (byte)(DEFAULT_JOGCON_DIAL_MAX >> 8));
+  EEPROM.write(EEPADR_JOG_MAX_L, (byte)(DEFAULT_JOGCON_DIAL_MAX & 0xff));
+  EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, DEFAULT_NEG_REDUCE_HANDLE_PLAY + 1); // ゲタ（+1）をはかせて保存
+  EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, DEFAULT_NEG_LT_CURVE);
+  EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, DEFAULT_NEG_RT_CURVE);
   EEPROM.commit();
 }
 
@@ -225,8 +235,8 @@ void eepromFormat() {
 byte restoreNegLtCurve() {
   byte tmp;
   tmp = EEPROM.read(EEPADR_NEG_ANALOG_LT_CURVE);
-  if (tmp > 3) {
-    tmp = NEG_ANALOG_CURVE_LINEAR;
+  if (tmp >= NEG_ANALOG_CURVE_MAX) {
+    tmp = DEFAULT_NEG_LT_CURVE;
     Serial.printf("[%lu] EEP Write!\n", millis());
     EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, tmp);
     EEPROM.commit();
@@ -241,8 +251,8 @@ byte restoreNegLtCurve() {
 byte restoreNegRtCurve() {
   byte tmp;
   tmp = EEPROM.read(EEPADR_NEG_ANALOG_RT_CURVE);
-  if (tmp > 3) {
-    tmp = NEG_ANALOG_CURVE_LINEAR;
+  if (tmp >= NEG_ANALOG_CURVE_MAX) {
+    tmp = DEFAULT_NEG_RT_CURVE;
     Serial.printf("[%lu] EEP Write!\n", millis());
     EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, tmp);
     EEPROM.commit();
@@ -295,7 +305,7 @@ byte restoreNegDegMax() {
   tmp = EEPROM.read(EEPADR_NEG_NEGMAX);
 
   if (tmp < 0x80) {
-    tmp = 255 / ((NEG_CALIB - 1) / 2 + 1);
+    tmp = DEFAULT_NEG_TWIST_MAX;
     Serial.printf("[%lu] EEP Write!\n", millis());
     EEPROM.write(EEPADR_NEG_NEGMAX, tmp);
     EEPROM.commit();
@@ -314,11 +324,10 @@ short restorejogMax() {
   tmp = (tmp << 8) | (short)EEPROM.read(EEPADR_JOG_MAX_L);
 
   if (tmp < 0x10) {
-    tmp = 100;
-    EEPROM.write(EEPADR_JOG_MAX_U, 0);
-    EEPROM.write(EEPADR_JOG_MAX_L, 100);
+    tmp = DEFAULT_JOGCON_DIAL_MAX;
+    EEPROM.write(EEPADR_JOG_MAX_U, (byte)(tmp >> 8));
+    EEPROM.write(EEPADR_JOG_MAX_L, (byte)(tmp & 0xff));
     Serial.printf("[%lu] EEP Write!\n", millis());
-    EEPROM.write(EEPADR_NEG_NEGMAX, tmp);
     EEPROM.commit();
   }
 
@@ -334,7 +343,7 @@ byte restoreAnaDegMax() {
   tmp = EEPROM.read(EEPADR_ANALOG_STICKMAX);
 
   if (tmp < 0x80) {
-    tmp = 255;
+    tmp = DEFAULT_ANALOG_LX_MAX;
     Serial.printf("[%lu] EEP Write!\n", millis());
     EEPROM.write(EEPADR_ANALOG_STICKMAX, tmp);
     EEPROM.commit();
@@ -360,7 +369,7 @@ byte restoreNegStickMode() {
       break;
 
     default:
-      tmp = MODE_STD;
+      tmp = DEFAULT_STICK_MODE;
       Serial.printf("[%lu] EEP Write!\n", millis());
       EEPROM.write(EEPADR_NEGMODE, tmp);
       EEPROM.commit();
@@ -378,9 +387,9 @@ byte restoreNegReduceHandlePlay() {
   byte tmp;
   tmp = EEPROM.read(EEPADR_NEG_REDUCE_HANDLE_PLAY);
 
-  // ゲタ（+1）を考慮し、未設定（0）または範囲外（33より大きい）なら初期値16（ゲタありで17）にする
-  if (tmp == 0 || tmp > 33) {
-    tmp = 17; // 16 + 1 (ゲタ)
+  // ゲタ（+1）を考慮し、未設定（0）または範囲外（MAX_NEG_REDUCE_HANDLE_PLAY+1より大きい）なら初期値DEFAULT_NEG_REDUCE_HANDLE_PLAY（ゲタありで+1）にする
+  if (tmp == 0 || tmp > MAX_NEG_REDUCE_HANDLE_PLAY+1) {
+    tmp = DEFAULT_NEG_REDUCE_HANDLE_PLAY + 1;
     Serial.printf("[%lu] EEP Write!\n", millis());
     EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, tmp);
     EEPROM.commit();
@@ -422,6 +431,7 @@ short jogcon_abs_val(short x) {
 
 /// <summary>
 /// 最大キャリブレーション値に基づいてアナログスティック範囲を補正
+/// アナログ値はすべて0x80をセンターとした値
 /// </summary>
 /// <param name="lx">補正対象のアナログ値</param>
 /// <param name="max">最大キャリブレーション値</param>
@@ -682,27 +692,8 @@ void saveConfig() {
     return;
   }
 
-  file.println(F("[neGcon]"));
-  file.println(F("; neGcon2Xbox_pico CONFIGURATION FILE"));
-  file.println();
-  file.println(F("; RT/LT analog sensitivity curve (0: LINEAR, 1: A1 (p=2.0), 2: A2 (p=4.0), 3: A3 (p=6.0))"));
-  file.print(F("negLtCurve=")); file.println(negLtCurve);
-  file.print(F("negRtCurve=")); file.println(negRtCurve);
-  file.println();
-  file.println(F("; Twist play reduction (deadzone compensation) value (0 to 32)"));
-  file.print(F("negReduceHandlePlay=")); file.println(negReduceHandlePlay);
-  file.println();
-  file.println(F("; Twist max angle calibration value (1 to 255)"));
-  file.print(F("negTwistMax=")); file.println(lxMax);
-  file.println();
-  file.println(F("; Jogcon Dial max position calibration value (8 to 500)"));
-  file.print(F("jogconDialMax=")); file.println(jogconDialMax);
-  file.println();
-  file.println(F("; Controller operation mode (0: STD, 1: SWAPAB, 2: SWAPLTRT, 3: SWAPAB_SWAPLTRT)"));
-  file.print(F("stickMode=")); file.println(stickMode);
-  file.println();
-  file.println(F("; Analog stick max calibration value (128 to 255)"));
-  file.print(F("analogLxMax=")); file.println(analogLxMax);
+  // テンプレート関数を使って設定値を CONFIG.INI に書き出し
+  writeConfigIni(file, negLtCurve, negRtCurve, negReduceHandlePlay, lxMax, jogconDialMax, stickMode, analogLxMax);
 
   file.close();
   config_file_writing = false;
@@ -714,9 +705,11 @@ void saveConfig() {
 /// </summary>
 void loadConfig() {
 
-
   if (!fs_ready) {
     // FATFS が使えない場合は、本物の EEPROM からロードする
+    if (eepromCheck() != true) {
+      eepromFormat();
+    }
     negLtCurve = restoreNegLtCurve();
     negRtCurve = restoreNegRtCurve();
     negReduceHandlePlay = restoreNegReduceHandlePlay();
@@ -727,8 +720,6 @@ void loadConfig() {
     return;
   }
 
-
-
   // ファイルが存在しない場合は、まず作成する (無限再帰を防ぐ)
   if (!FatFS.exists("/CONFIG.INI")) {
     migrateOrInitConfig(); // ここで初期ファイルが作成される
@@ -737,6 +728,9 @@ void loadConfig() {
   File file = FatFS.open("/CONFIG.INI", "r");
   if (!file) {
     // それでもファイルが開けない場合は、本物の EEPROM からロードして諦める (再帰はしない)
+    if (eepromCheck() != true) {
+      eepromFormat();
+    }
     negLtCurve = restoreNegLtCurve();
     negRtCurve = restoreNegRtCurve();
     negReduceHandlePlay = restoreNegReduceHandlePlay();
@@ -751,6 +745,9 @@ void loadConfig() {
   if (file.size() < 50 || file.size() > 4096) {
     file.close();
     FatFS.remove("/CONFIG.INI");
+    if (eepromCheck() != true) {
+      eepromFormat();
+    }
     negLtCurve = restoreNegLtCurve();
     negRtCurve = restoreNegRtCurve();
     negReduceHandlePlay = restoreNegReduceHandlePlay();
@@ -856,15 +853,18 @@ void migrateOrInitConfig() {
     stickMode = restoreNegStickMode();
     saveConfig();
   } else {
-    // 無ければ CONFIG.INI をテンプレートから生成
+    // 無ければ CONFIG.INI をテンプレートからデフォルト値で生成
     File file = FatFS.open("/CONFIG.INI", "w");
     if (file) {
-      const char* p = CONFIG_INI_TEMPLATE;
-      while (true) {
-        char c = pgm_read_byte(p++);
-        if (c == 0) break;
-        file.write((uint8_t)c); // uint8_tにキャストして型解決エラーを回避
-      }
+      // デフォルトの設定値を渡して初期ファイルを生成
+      writeConfigIni(file, 
+                     DEFAULT_NEG_LT_CURVE, 
+                     DEFAULT_NEG_RT_CURVE, 
+                     DEFAULT_NEG_REDUCE_HANDLE_PLAY, 
+                     DEFAULT_NEG_TWIST_MAX, 
+                     DEFAULT_JOGCON_DIAL_MAX, 
+                     DEFAULT_STICK_MODE, 
+                     DEFAULT_ANALOG_LX_MAX);
       file.close();
     }
   }
