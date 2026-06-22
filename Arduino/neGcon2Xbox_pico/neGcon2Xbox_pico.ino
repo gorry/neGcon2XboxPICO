@@ -182,7 +182,9 @@ enum MetaKeyState {
 static MetaKeyState metaState = META_STATE_IDLE;
 static unsigned long menuOnUntil = 0;
 
-// EEPROMのClear関数
+/// <summary>
+/// EEPROMの初期設定と全領域のクリア
+/// </summary>
 void eepromFormat() {
   Serial.printf("[%lu] EEP Write!\n", millis());
   for (int i = 0; i < EEPROMSIZE; i++) {
@@ -202,7 +204,10 @@ void eepromFormat() {
   EEPROM.commit();
 }
 
-// neGconアナログLTカーブ設定の復帰
+/// <summary>
+/// neGconのアナログLT感度カーブの設定値を復元
+/// </summary>
+/// <returns>復元されたカーブのインデックス (0-3)</returns>
 byte restoreNegLtCurve() {
   byte tmp;
   tmp = EEPROM.read(EEPADR_NEG_ANALOG_LT_CURVE);
@@ -215,7 +220,10 @@ byte restoreNegLtCurve() {
   return tmp;
 }
 
-// neGconアナログRTカーブ設定の復帰
+/// <summary>
+/// neGconのアナログRT感度カーブの設定値を復元
+/// </summary>
+/// <returns>復元されたカーブのインデックス (0-3)</returns>
 byte restoreNegRtCurve() {
   byte tmp;
   tmp = EEPROM.read(EEPADR_NEG_ANALOG_RT_CURVE);
@@ -228,7 +236,12 @@ byte restoreNegRtCurve() {
   return tmp;
 }
 
-// neGconアナログボタンの感度カーブ適用関数
+/// <summary>
+/// 感度カーブを適用してアナログ値を補正
+/// </summary>
+/// <param name="value">補正前のアナログ値 (0-255)</param>
+/// <param name="curveType">カーブの種類 (NEG_ANALOG_CURVE_LINEAR ~ A3)</param>
+/// <returns>補正後のアナログ値 (0-255)</returns>
 byte applyAnalogCurve(byte value, byte curveType) {
   if (curveType == NEG_ANALOG_CURVE_LINEAR) {
     return value;
@@ -248,7 +261,10 @@ byte applyAnalogCurve(byte value, byte curveType) {
   return (byte)result;
 }
 
-// EEPROM領域の確認
+/// <summary>
+/// EEPROMのフォーマット状態を確認
+/// </summary>
+/// <returns>有効な設定データが存在すれば true、存在しなければ false</returns>
 bool eepromCheck() {
   if (EEPROM.read(0) != 'c') return false;
   if (EEPROM.read(1) != 'f') return false;
@@ -256,7 +272,10 @@ bool eepromCheck() {
   return true;
 }
 
-// neGconモードひねり値の最大値の復帰
+/// <summary>
+/// neGconひねり量の最大キャリブレーション値を復元
+/// </summary>
+/// <returns>復元された最大キャリブレーション値 (0x80-255)</returns>
 byte restoreNegDegMax() {
   byte tmp;
   tmp = EEPROM.read(EEPADR_NEG_NEGMAX);
@@ -271,7 +290,10 @@ byte restoreNegDegMax() {
   return tmp;
 }
 
-// JOGCONひねり値の最大値の復帰
+/// <summary>
+/// Jogconダイヤルの最大回転キャリブレーション値を復元
+/// </summary>
+/// <returns>復元された最大キャリブレーション値 (8-500)</returns>
 short restorejogMax() {
   short tmp;
   tmp = (short)EEPROM.read(EEPADR_JOG_MAX_U);
@@ -289,7 +311,10 @@ short restorejogMax() {
   return tmp;
 }
 
-// アナログスティックモードひねり値の最大値の復帰
+/// <summary>
+/// 通常アナログスティックの最大キャリブレーション値を復元
+/// </summary>
+/// <returns>復元された最大キャリブレーション値 (128-255)</returns>
 byte restoreAnaDegMax() {
   byte tmp;
   tmp = EEPROM.read(EEPADR_ANALOG_STICKMAX);
@@ -304,7 +329,10 @@ byte restoreAnaDegMax() {
   return tmp;
 }
 
-// neGconモード設定の復帰
+/// <summary>
+/// コントローラーのボタン配置モード設定を復元
+/// </summary>
+/// <returns>復元されたモードインデックス (MODE_STD ~ AIRCON22)</returns>
 byte restoreNegStickMode() {
   byte tmp;
   tmp = EEPROM.read(EEPADR_NEGMODE);
@@ -328,7 +356,10 @@ byte restoreNegStickMode() {
   return tmp;
 }
 
-// neGcon遊び削減値の復帰
+/// <summary>
+/// neGconハンドル（ひねり）の遊び削減値を復元
+/// </summary>
+/// <returns>復元された遊び削減値 (0-32)</returns>
 byte restoreNegReduceHandlePlay() {
   byte tmp;
   tmp = EEPROM.read(EEPADR_NEG_REDUCE_HANDLE_PLAY);
@@ -344,7 +375,9 @@ byte restoreNegReduceHandlePlay() {
   return tmp - 1; // ゲタ（-1）をはずして 0-32 の実際の値を返す
 }
 
-// XInputデータを安全に送信（設定モード中は入力をニュートラルにする）
+/// <summary>
+/// XInputレポートをPCへ送信
+/// </summary>
 void send_xbox_report() {
   if (stickMode == MODE_SETTING_NEG) {
     xboxcontroller_reset();
@@ -352,7 +385,11 @@ void send_xbox_report() {
   xboxcontroller_send_report();
 }
 
-// 絶対値 計算関数
+/// <summary>
+/// アナログ値のセンター(0x80)からの絶対偏差を計算
+/// </summary>
+/// <param name="lx">対象のアナログ値 (0-255)</param>
+/// <returns>0x80からの絶対偏差値</returns>
 int absoluteXY(byte lx) {
   int lx_tmp;
   if (lx < 0x80) lx_tmp = (int)(0xFF - lx);
@@ -360,12 +397,21 @@ int absoluteXY(byte lx) {
   return lx_tmp;
 }
 
-// short型絶対値計算関数
+/// <summary>
+/// short型値の絶対値を計算
+/// </summary>
+/// <param name="x">入力値</param>
+/// <returns>入力値の絶対値</returns>
 short jogcon_abs_val(short x) {
   return x < 0 ? -x : x;
 }
 
-// 補正値計算
+/// <summary>
+/// 最大キャリブレーション値に基づいてアナログスティック範囲を補正
+/// </summary>
+/// <param name="lx">補正対象のアナログ値</param>
+/// <param name="max">最大キャリブレーション値</param>
+/// <returns>0-255の範囲にスケーリングされた補正後のアナログ値</returns>
 int adjustXY(byte lx, byte max) {
   int lx_tmp;
 
@@ -382,6 +428,10 @@ int adjustXY(byte lx, byte max) {
 }
 
 // プレステコントローラ向けの標準キー配置のXboxへの変換処理
+/// <summary>
+/// PSXボタン入力をXInputボタン入力データへ変換 (拡張版)
+/// </summary>
+/// <param name="buttons">PSXコントローラーから読み取ったボタンワード</param>
 void keyConvert_psx2xbox_ex(uint16_t buttons) {
   // D-pad (十字キー)
   if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_UP;
@@ -438,18 +488,26 @@ void keyConvert_psx2xbox_ex(uint16_t buttons) {
     XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_X;
 }
 
+/// <summary>
+/// 現在取得しているPSXボタン入力をXInputボタン入力データへ変換
+/// </summary>
 void keyConvert_psx2xbox() {
   keyConvert_psx2xbox_ex(psx.getButtonWord());
 }
 
 
-// CPU1では、NeoPixel LEDの点灯処理をさせる
+/// <summary>
+/// Core 1 (サブコア) の初期化処理
+/// </summary>
 void setup1() {  // core 0
   while (!setup_done) {
     delay(50);
   }
 }
 
+/// <summary>
+/// Core 1 (サブコア) のメインループ
+/// </summary>
 void loop1() {  // core 0
   if (flash_busy) {
     delay(100);
@@ -596,6 +654,9 @@ bool ConfigEEPROMWrapper::commit() {
   return true;
 }
 
+/// <summary>
+/// 設定パラメータを /CONFIG.INI ファイルへ書き出し保存
+/// </summary>
 void saveConfig() {
   if (!fs_ready) return;
   flash_busy = true; // Core 1 の動作を一時停止
@@ -635,6 +696,9 @@ void saveConfig() {
   flash_busy = false; // Core 1 の動作を再開
 }
 
+/// <summary>
+/// /CONFIG.INI ファイルまたは EEPROM から設定パラメータをロード
+/// </summary>
 void loadConfig() {
 
 
@@ -769,6 +833,9 @@ void loadConfig() {
   }
 }
 
+/// <summary>
+/// EEPROM設定を CONFIG.INI へ移行、またはテンプレートから初期生成
+/// </summary>
 void migrateOrInitConfig() {
   if (!fs_ready) return;
 
@@ -796,6 +863,9 @@ void migrateOrInitConfig() {
   }
 }
 
+/// <summary>
+/// Core 0 (メインコア) の初期化処理
+/// </summary>
 void setup() {
   // 最初に NeoPixel を起動し、Core 0 側で初期化する
   pinMode(NEO_PWR, OUTPUT);
@@ -903,6 +973,9 @@ void setup() {
   RealEEPROM.commit();
 }
 
+/// <summary>
+/// Core 0 (メインコア) のメインループ
+/// </summary>
 void loop() {
   if (usb_mode_msc) {
     tud_task();

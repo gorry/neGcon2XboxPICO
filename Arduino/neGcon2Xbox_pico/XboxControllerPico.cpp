@@ -130,7 +130,10 @@ tusb_desc_device_t const xinputDeviceDescriptor = {
   .bNumConfigurations = 0x01
 };
 
-// Device Descriptor Callback
+/// <summary>
+/// USB デバイス記述子を取得するコールバック
+/// </summary>
+/// <returns>現在の動作モード (MSC / XInput) に応じたデバイス記述子ポインタ</returns>
 uint8_t const *tud_descriptor_device_cb(void) {
   if (usb_mode_msc) {
     return (uint8_t const *)&mscDeviceDescriptor;
@@ -182,7 +185,11 @@ const uint8_t xinputConfigurationDescriptor[] = {
   0x08, // bInterval (8 frames = 8ms)
 };
 
-// Configuration Descriptor Callback
+/// <summary>
+/// USB 構成記述子を取得するコールバック
+/// </summary>
+/// <param name="index">構成インデックス</param>
+/// <returns>現在の動作モード (MSC / XInput) に応じた構成記述子ポインタ</returns>
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
   (void)index;
   if (usb_mode_msc) {
@@ -202,7 +209,12 @@ char const *string_desc_arr_xinput[] = {
 
 static uint16_t _desc_str[32];
 
-// String Descriptor Callback
+/// <summary>
+/// USB 文字列記述子を取得するコールバック
+/// </summary>
+/// <param name="index">文字列のインデックス</param>
+/// <param name="langid">言語ID</param>
+/// <returns>UTF-16形式でエンコードされた文字列記述子のポインタ</returns>
 uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
   (void)langid;
   uint8_t chr_count;
@@ -234,14 +246,32 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
   return _desc_str;
 }
 
-// HID Report Descriptor Callback
+/// <summary>
+/// USB HID レポート記述子を取得するコールバック (ダミー)
+/// </summary>
+/// <returns>常に NULL</returns>
 uint8_t const *tud_hid_descriptor_report_cb(void) {
   return NULL;
 }
 
+/// <summary>
+/// XInput ドライバー初期化関数 (内部用ダミー)
+/// </summary>
 static void xinput_init(void) {}
+
+/// <summary>
+/// XInput ドライバーのリセット処理 (内部用ダミー)
+/// </summary>
+/// <param name="rhport">ルートハブポート番号</param>
 static void xinput_reset(uint8_t __unused rhport) {}
 
+/// <summary>
+/// XInput インターフェースのオープン処理
+/// </summary>
+/// <param name="rhport">ルートハブポート番号</param>
+/// <param name="itf_desc">インターフェース記述子のポインタ</param>
+/// <param name="max_len">最大許容長</param>
+/// <returns>オープンしたドライバ構成のバイト長さ</returns>
 static uint16_t xinput_open(uint8_t __unused rhport, tusb_desc_interface_t const *itf_desc, uint16_t max_len) {
   uint16_t const drv_len = sizeof(tusb_desc_interface_t) + itf_desc->bNumEndpoints * sizeof(tusb_desc_endpoint_t) + 16;
   TU_VERIFY(max_len >= drv_len, 0);
@@ -265,12 +295,27 @@ static uint16_t xinput_open(uint8_t __unused rhport, tusb_desc_interface_t const
   return drv_len;
 }
 
+/// <summary>
+/// XInput デバイス制御要求（コントロール転送）のコールバック
+/// </summary>
+/// <param name="rhport">ルートハブポート番号</param>
+/// <param name="stage">コントロール転送ステージ</param>
+/// <param name="request">制御要求構造体のポインタ</param>
+/// <returns>要求が受け入れられた場合は true、それ以外は false</returns>
 static bool xinput_device_control_request(uint8_t __unused rhport, uint8_t stage, tusb_control_request_t const *request) {
   (void) stage;
   (void) request;
   return true;
 }
 
+/// <summary>
+/// XInput エンドポイント転送完了コールバック
+/// </summary>
+/// <param name="rhport">ルートハブポート番号</param>
+/// <param name="ep_addr">エンドポイントアドレス</param>
+/// <param name="result">転送結果</param>
+/// <param name="xferred_bytes">転送完了バイト数</param>
+/// <returns>転送の成否</returns>
 static bool xinput_xfer_cb(uint8_t __unused rhport, uint8_t __unused ep_addr, xfer_result_t __unused result, uint32_t __unused xferred_bytes) {
   return true;
 }
@@ -310,6 +355,11 @@ static usbd_class_driver_t const msc_local_driver = {
   .sof              = NULL
 };
 
+/// <summary>
+/// TinyUSBに登録するクラスドライバーを取得するコールバック
+/// </summary>
+/// <param name="driver_count">登録ドライバ数の返却先バッファ</param>
+/// <returns>動作モード (MSC / XInput) に応じたクラスドライバー構造体のポインタ</returns>
 extern "C" usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count) {
   if (usb_mode_msc) {
     *driver_count = 1;
@@ -320,6 +370,9 @@ extern "C" usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_cou
   }
 }
 
+/// <summary>
+/// Xbox 360コントローラー（XInput）およびUSBデバイススタックの初期化
+/// </summary>
 void xboxcontroller_init(void) {
   memset(&XboxButtonData, 0, sizeof(ReportDataXinput_t));
   XboxButtonData.message_type = 0x00;
@@ -327,6 +380,9 @@ void xboxcontroller_init(void) {
   tusb_init();
 }
 
+/// <summary>
+/// XInput送信データおよびアナログ値をニュートラルにリセット
+/// </summary>
 void xboxcontroller_reset(void) {
   memset(&XboxButtonData, 0, sizeof(ReportDataXinput_t));
   XboxButtonData.message_type = 0x00;
@@ -337,6 +393,10 @@ void xboxcontroller_reset(void) {
   XboxButtonData.r_y = 0;
 }
 
+/// <summary>
+/// XInput送信データをPCへ送信
+/// </summary>
+/// <returns>送信に成功した場合は true、未接続または送信ビジーの場合は false</returns>
 bool xboxcontroller_send_report(void) {
   if (tud_suspended()) {
     tud_remote_wakeup();
@@ -356,20 +416,46 @@ bool xboxcontroller_send_report(void) {
 // =========================================================================
 extern "C" {
 
+/// <summary>
+/// LUN（論理ユニット番号）の最大インデックスを取得するコールバック
+/// </summary>
+/// <returns>常に 0 (シングルLUN)</returns>
 uint8_t tud_msc_get_maxlun_cb(void) {
   return 0; // LUNの最大インデックス（LUN数 - 1）。LUN数が1つの場合は0を返す。
 }
 
+/// <summary>
+/// ホストからの START STOP UNIT コマンド処理コールバック
+/// </summary>
+/// <param name="lun">論理ユニット番号</param>
+/// <param name="power_condition">電源状態</param>
+/// <param name="start">起動フラグ</param>
+/// <param name="load_eject">イジェクトフラグ</param>
+/// <returns>処理の成否</returns>
 bool tud_msc_start_stop_cb(uint8_t lun, uint8_t power_condition, bool start, bool load_eject) {
   (void) lun; (void) power_condition; (void) start; (void) load_eject;
   return true;
 }
 
+/// <summary>
+/// ホストからのメディア取り出し防止・許可コマンド処理コールバック
+/// </summary>
+/// <param name="lun">論理ユニット番号</param>
+/// <param name="prohibit_removal">取り出し禁止フラグ</param>
+/// <param name="control">制御フラグ</param>
+/// <returns>処理の成否</returns>
 bool tud_msc_prevent_allow_medium_removal_cb(uint8_t lun, uint8_t prohibit_removal, uint8_t control) {
   (void) lun; (void) prohibit_removal; (void) control;
   return true;
 }
 
+/// <summary>
+/// ホストからの INQUIRY コマンド処理コールバック
+/// </summary>
+/// <param name="lun">論理ユニット番号</param>
+/// <param name="vendor_id">ベンダーID書き込み先バッファ</param>
+/// <param name="product_id">プロダクトID書き込み先バッファ</param>
+/// <param name="product_rev">製品リビジョン書き込み先バッファ</param>
 void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16], uint8_t product_rev[4]) {
   (void) lun;
   const char vid[] = "Antigrav";
@@ -386,6 +472,12 @@ void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16
   memcpy(product_rev, rev, tu_min32(strlen(rev), 4));
 }
 
+/// <summary>
+/// メディア容量情報を返却するコールバック
+/// </summary>
+/// <param name="lun">論理ユニット番号</param>
+/// <param name="block_count">ブロック数書き込み先バッファ</param>
+/// <param name="block_size">ブロックサイズ書き込み先バッファ</param>
 void tud_msc_read_capacity_cb(uint8_t lun, uint32_t* block_count, uint16_t* block_size) {
   (void) lun;
   uint32_t start_addr = (uint32_t)&_FS_start;
@@ -397,25 +489,58 @@ void tud_msc_read_capacity_cb(uint8_t lun, uint32_t* block_count, uint16_t* bloc
   *block_count = flash_size / MSC_BLOCK_SIZE;
 }
 
+/// <summary>
+/// メディア容量情報を返却するコールバック (古い形式のハンドラ用)
+/// </summary>
+/// <param name="lun">論理ユニット番号</param>
+/// <param name="block_count">ブロック数書き込み先バッファ</param>
+/// <param name="block_size">ブロックサイズ書き込み先バッファ</param>
 void tud_msc_capacity_cb(uint8_t lun, uint32_t* block_count, uint16_t* block_size) {
   tud_msc_read_capacity_cb(lun, block_count, block_size);
 }
 
+/// <summary>
+/// 未処理のSCSIコマンドを受信した際のコールバック
+/// </summary>
+/// <param name="lun">論理ユニット番号</param>
+/// <param name="scsi_cmd">SCSIコマンドデータ</param>
+/// <param name="buffer">コマンドバッファポインタ</param>
+/// <param name="bufsize">バッファサイズ</param>
+/// <returns>処理したバイト数 (常に -1 を返して未サポートとする)</returns>
 int32_t tud_msc_scsi_cb(uint8_t lun, uint8_t const scsi_cmd[16], void* buffer, uint16_t bufsize) {
   (void) lun; (void) scsi_cmd; (void) buffer; (void) bufsize;
   return -1;
 }
 
+/// <summary>
+/// メディアのレディ状態をチェックするコールバック
+/// </summary>
+/// <param name="lun">論理ユニット番号</param>
+/// <returns>常に true (準備完了)</returns>
 bool tud_msc_test_unit_ready_cb(uint8_t lun) {
   (void) lun;
   return true;
 }
 
+/// <summary>
+/// メディアの書き込み保護状態をチェックするコールバック
+/// </summary>
+/// <param name="lun">論理ユニット番号</param>
+/// <returns>書き込み制限中（ファイル書き込み処理中など）は true、それ以外は false</returns>
 bool tud_msc_is_write_protected_cb(uint8_t lun) {
   (void) lun;
   return config_file_writing;
 }
 
+/// <summary>
+/// ホストからの LBA 読み出し要求処理コールバック
+/// </summary>
+/// <param name="lun">論理ユニット番号</param>
+/// <param name="lba">論理ブロックアドレス</param>
+/// <param name="offset">ブロック内オフセットバイト数</param>
+/// <param name="buffer">データ格納先バッファポインタ</param>
+/// <param name="bufsize">読み出し要求バイト数</param>
+/// <returns>読み出したバイト数、失敗時は -1</returns>
 int32_t tud_msc_read10_cb(uint8_t lun, uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
   (void) lun;
 
@@ -446,6 +571,15 @@ int32_t tud_msc_read10_cb(uint8_t lun, uint32_t lba, uint32_t offset, void* buff
   return -1;
 }
 
+/// <summary>
+/// ホストからの LBA 書き込み要求処理コールバック (キャッシュ書き込み)
+/// </summary>
+/// <param name="lun">論理ユニット番号</param>
+/// <param name="lba">論理ブロックアドレス</param>
+/// <param name="offset">ブロック内オフセットバイト数</param>
+/// <param name="buffer">書き込みデータバッファポインタ</param>
+/// <param name="bufsize">書き込み要求バイト数</param>
+/// <returns>書き込んだバイト数、失敗時は -1</returns>
 int32_t tud_msc_write10_cb(uint8_t lun, uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t bufsize) {
   (void) lun;
 
@@ -481,6 +615,9 @@ int32_t tud_msc_write10_cb(uint8_t lun, uint32_t lba, uint32_t offset, uint8_t* 
 
 } // extern "C"
 
+/// <summary>
+/// 未フラッシュの書き込みキャッシュを物理フラッシュに非同期コミットするタスク
+/// </summary>
 void tud_msc_sync_task(void) {
   if (msc_write_dirty && (millis() - last_msc_write_time >= 500)) {
     // 物理フラッシュへの書き出しタイミングでアクセスランプ(赤)を点灯
@@ -496,6 +633,10 @@ void tud_msc_sync_task(void) {
   }
 }
 
+/// <summary>
+/// 指定した動作モード (MSC / XInput) に合わせてコントローラーを再起動
+/// </summary>
+/// <param name="as_msc">true で MSC モード起動、false で通常コントローラーモード起動</param>
 void xboxcontroller_reconnect(bool as_msc) {
   // BOOTSELボタンが離されるまで待つ
   // (リブート時にボタンが押されたままだとブートROMのRPI-RP2モードに入ってしまうのを防ぐため)
