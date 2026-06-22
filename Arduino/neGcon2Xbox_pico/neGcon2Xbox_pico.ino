@@ -186,9 +186,9 @@ static unsigned long menuOnUntil = 0;
 /// --- グローバル変数 (loop内のstatic変数を昇格) ---
 static unsigned long lastPsxReadTime = 0;
 static unsigned long lastSearchTime = 0; // psx.begin() の間隔制限用
-static int sBootSel = 0;
 static byte beforeStickMode;
 static bool changeNegStickMode;
+static bool bootselWaitingForRelease = false; // 設定モード移行時にボタン解放を待つためのフラグ
 static byte slx = 0, sly = 0, sb1 = 0, sb2 = 0, sbL = 0;
 static byte srx = 0, sry = 0;
 static short sjogx = 0;
@@ -959,6 +959,14 @@ void setup() {
   // 設定ファイルのロード (通常コントローラーモード時のみロードし、MSCモード時はスキップしてフリーズを防ぐ)
   if (!usb_mode_msc) {
     loadConfig();
+    Serial.printf("[%lu] Active Config values:\n", millis());
+    Serial.printf("  negLtCurve: %d\n", negLtCurve);
+    Serial.printf("  negRtCurve: %d\n", negRtCurve);
+    Serial.printf("  negReduceHandlePlay: %d\n", negReduceHandlePlay);
+    Serial.printf("  negTwistMax: %d\n", lxMax);
+    Serial.printf("  jogconDialMax: %d\n", jogconDialMax);
+    Serial.printf("  stickMode: %d\n", stickMode);
+    Serial.printf("  analogLxMax: %d\n", analogLxMax);
   }
 
   // (他コア再開処理を削除)
@@ -1745,25 +1753,59 @@ void process_msc_mode() {
 }
 
 /// <summary>
+/// スティックモード（スワップ設定）を次のモードへトグル切り替えし、EEPROMに保存します。
+/// </summary>
+void toggle_stick_mode() {
+  // コントローラーが neGcon または Jogcon の場合のみスワップ切り替えをローテーションします
+  if ((OldpsxStickMode == PSPROTO_NEGCON) || (OldpsxStickMode == PSPROTO_JOGCON)) {
+    // STD（標準）-> SWAPAB（ABスワップ）-> SWAPLTRT（LTRTスワップ）-> SWAPAB_SWAPLTRT（両方スワップ）
+    if (stickMode == MODE_STD) stickMode = MODE_SWAPAB;
+    else if (stickMode == MODE_SWAPAB) stickMode = MODE_SWAPLTRT;
+    else if (stickMode == MODE_SWAPLTRT) stickMode = MODE_SWAPAB_SWAPLTRT;
+    else if (stickMode == MODE_SWAPAB_SWAPLTRT) stickMode = MODE_STD;
+    else stickMode = MODE_STD;
+
+    // 新しい設定モードを内蔵EEPROMに書き込み、コミットして確定させます
+    Serial.printf("[%lu] EEP Write!\n", millis());
+    EEPROM.write(EEPADR_NEGMODE, stickMode);
+    EEPROM.commit();
+  }
+}
+
+/// <summary>
 /// 設定（キャリブレーション・感度カーブ）モードの処理を行います。
 /// BOOTSELボタンの短押しにより、接続中のneGcon/Jogconのキー設定・スワップモードの切り替え等を行います。
 /// </summary>
 void process_setting_mode() {
+  static unsigned long bootselPressStart = 0;
+
+  // 設定モード突入直後のボタン離し待ち
+  if (bootselWaitingForRelease) {
+    if (BOOTSEL) {
+      digitalWrite(PIN_ERRORLED, LOW); // 押されている間は赤色LEDを点灯
+      return;
+    } else {
+      digitalWrite(PIN_ERRORLED, HIGH); // 離されたら消灯してフラグをクリア
+      bootselWaitingForRelease = false;
+      bootselPressStart = 0;
+      changeNegStickMode = false;
+      return;
+    }
+  }
+
   // BOOTSELボタンが押されている場合の処理
   if (BOOTSEL) {
     digitalWrite(PIN_ERRORLED, LOW); // 設定変更操作中であることを示すため、赤色LED（ERROR LED）を点灯（LOWで点灯）
     
-    // チャタリング防止および短押し時間の計測のため、ループ回数をカウントします
-    if (sBootSel < 375) {
-      if (sBootSel == 0) {
-        changeNegStickMode = false; // ボタン押下開始の直後は、スティックモード変更フラグを初期化
-      }
-      if (sBootSel == 9) {
-        // 短押し閾値（約70〜80ms）に達したら変更フラグを有効化し、現在の設定モード値をログ出力します
+    if (bootselPressStart == 0) {
+      bootselPressStart = millis();
+      changeNegStickMode = false; // ボタン押下開始の直後は、スティックモード変更フラグを初期化
+    } else if (millis() - bootselPressStart >= 70) {
+      // 短押し閾値（約70ms以上）に達したら変更フラグを有効化
+      if (!changeNegStickMode) {
         changeNegStickMode = true;
         Serial.printf("[%lu] Current Stick mode is: %d\n", millis(), stickMode);
       }
-      sBootSel++;
     }
   } else {
     // BOOTSELボタンが離された場合の処理
@@ -1771,20 +1813,7 @@ void process_setting_mode() {
     
     // ボタンが短押しされたと判定されている場合、スティックモード（スワップ設定）の切り替えを行います
     if (changeNegStickMode) {
-      // コントローラーが neGcon または Jogcon の場合のみスワップ切り替えをローテーションします
-      if ((OldpsxStickMode == PSPROTO_NEGCON) || (OldpsxStickMode == PSPROTO_JOGCON)) {
-        // STD（標準）-> SWAPAB（ABスワップ）-> SWAPLTRT（LTRTスワップ）-> SWAPAB_SWAPLTRT（両方スワップ）
-        if (stickMode == MODE_STD) stickMode = MODE_SWAPAB;
-        else if (stickMode == MODE_SWAPAB) stickMode = MODE_SWAPLTRT;
-        else if (stickMode == MODE_SWAPLTRT) stickMode = MODE_SWAPAB_SWAPLTRT;
-        else if (stickMode == MODE_SWAPAB_SWAPLTRT) stickMode = MODE_STD;
-        else stickMode = MODE_STD;
-
-        // 新しい設定モードを内蔵EEPROMに書き込み、コミットして確定させます
-        Serial.printf("[%lu] EEP Write!\n", millis());
-        EEPROM.write(EEPADR_NEGMODE, stickMode);
-        EEPROM.commit();
-      }
+      toggle_stick_mode();
 
       // モード切り替え後、設定モード（MODE_SETTING_NEG）を抜けて切り替えた通常動作モードへ復帰します
       if (stickMode == MODE_SETTING_NEG) stickMode = beforeStickMode;
@@ -1794,7 +1823,7 @@ void process_setting_mode() {
 
     // ボタンの状態変数とカウンタをリセットして次の操作に備えます
     changeNegStickMode = false;
-    sBootSel = 0;
+    bootselPressStart = 0;
   }
 
   // 設定モードとしてコントローラー入力の読み出しとPCへの送信を実行します（is_setting = true）
@@ -1806,27 +1835,49 @@ void process_setting_mode() {
 /// BOOTSELボタンの長押し（約3秒）により、キャリブレーション等の設定を行う「設定モード」へ移行します。
 /// </summary>
 void process_controller_mode() {
+  static unsigned long bootselPressStart = 0;
+
   // BOOTSELボタンが押されている場合の処理
   if (BOOTSEL) {
     digitalWrite(PIN_ERRORLED, LOW); // 移行操作中（長押し中）であることを示すため、赤色LEDを点灯
     
-    // 長押し時間のカウント
-    if (sBootSel < 375) {
-      if (sBootSel == 374) {
-        // 約3秒（375ループ）押し続けられた場合、対応するアナログコントローラーが接続されていれば設定モードへ移行
-        if ((OldpsxStickMode == PSPROTO_NEGCON) || (OldpsxStickMode == PSPROTO_JOGCON) || (OldpsxStickMode == PSPROTO_FLIGHTSTICK)) {
-          Serial.printf("[%lu] Set Config mode\n", millis());
-          changeNegStickMode = false;
-          beforeStickMode = stickMode;     // 設定完了後の復帰用に現在の動作モードを退避
-          stickMode = MODE_SETTING_NEG;   // 動作状態を設定モード（MODE_SETTING_NEG）に切り替える
+    if (bootselPressStart == 0) {
+      bootselPressStart = millis();
+      changeNegStickMode = false;
+    } else {
+      unsigned long pressDuration = millis() - bootselPressStart;
+      if (pressDuration >= 3000) {
+        // 約3秒（3000ms）押し続けられた場合、対応するアナログコントローラーが接続されていれば設定モードへ移行
+        if (stickMode != MODE_SETTING_NEG) {
+          if ((OldpsxStickMode == PSPROTO_NEGCON) || (OldpsxStickMode == PSPROTO_JOGCON) || (OldpsxStickMode == PSPROTO_FLIGHTSTICK)) {
+            Serial.printf("[%lu] Set Config mode\n", millis());
+            changeNegStickMode = false;
+            beforeStickMode = stickMode;     // 設定完了後の復帰用に現在の動作モードを退避
+            stickMode = MODE_SETTING_NEG;   // 動作状態を設定モード（MODE_SETTING_NEG）に切り替える
+            bootselPressStart = 0;           // 移行したのでタイマーリセット
+            bootselWaitingForRelease = true; // ボタンがいったん離されるまで設定モード側のトグル判定を抑止
+          }
+        }
+      } else if (pressDuration >= 70) {
+        // 短押し閾値（約70ms以上）に達したら変更フラグを有効化
+        if (!changeNegStickMode) {
+          changeNegStickMode = true;
+          Serial.printf("[%lu] Current Stick mode is: %d\n", millis(), stickMode);
         }
       }
-      sBootSel++;
     }
   } else {
     // ボタンが押されていない時はカウンタと赤色LEDをクリアします
     digitalWrite(PIN_ERRORLED, HIGH); // 赤色LEDを消灯
-    sBootSel = 0;                     // 押下時間カウンタをリセット
+
+    // ボタンが短押しされたと判定されている場合、通常モード時にもスティックモード（スワップ設定）の切り替えを行います
+    if (changeNegStickMode) {
+      toggle_stick_mode();
+      Serial.printf("[%lu] Change Stick mode is: %d\n", millis(), stickMode);
+    }
+
+    changeNegStickMode = false;
+    bootselPressStart = 0;            // 押下時間タイマーをリセット
   }
 
   // 通常モードとしてコントローラー入力の読み出しとPCへの送信を実行します（is_setting = false）
