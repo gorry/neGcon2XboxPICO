@@ -32,9 +32,30 @@ volatile bool setup_done = false;
 #endif
 
 // 前方宣言
+struct ControllerState {
+  byte l_x, l_y, l_b1, l_b2, l_bL;
+  byte lx_org, ly_org, b1_org, b2_org, bL_org;
+  byte rx_org, ry_org;
+  byte r_x, r_y;
+  int l_x_tmp, xy_tmp;
+  short jogx;
+  PsxControllerProtocol psxStickMode;
+  bool is_setting;
+  unsigned long now;
+};
+
 void saveConfig();
 void loadConfig();
 void migrateOrInitConfig();
+void search_and_connect_controller(unsigned long now);
+void disconnect_controller();
+void toggle_stick_mode();
+void process_flightstick(ControllerState *state);
+void process_negcon(ControllerState *state);
+void process_jogcon(ControllerState *state);
+void process_dualshock(ControllerState *state);
+void process_default_controller(ControllerState *state);
+void process_connected_controller(bool is_setting, unsigned long now);
 
 // ConfigEEPROMWrapperの定義 (本物の EEPROM を使用)
 static auto& RealEEPROM = ::EEPROM;
@@ -692,8 +713,15 @@ void saveConfig() {
     return;
   }
 
-  // テンプレート関数を使って設定値を CONFIG.INI に書き出し
-  writeConfigIni(file, negLtCurve, negRtCurve, negReduceHandlePlay, lxMax, jogconDialMax, stickMode, analogLxMax);
+  // 設定モード・切断中・MSCモードなどの一時的な内部状態は保存せず、
+  // 通常動作モード（STD〜AIRCON22）のみを書き出す。
+  // それ以外のときは設定モード突入前のモード（beforeStickMode）を代わりに保存する。
+  auto isNormalStickMode = [](byte m) {
+    return m == MODE_STD || m == MODE_SWAPAB || m == MODE_SWAPLTRT ||
+           m == MODE_SWAPAB_SWAPLTRT || m == MODE_AIRCON22;
+  };
+  byte saveStickMode = isNormalStickMode(stickMode) ? stickMode : beforeStickMode;
+  writeConfigIni(file, negLtCurve, negRtCurve, negReduceHandlePlay, lxMax, jogconDialMax, saveStickMode, analogLxMax);
 
   file.close();
   config_file_writing = false;
@@ -1007,728 +1035,15 @@ void process_controller_core(bool is_setting) {
   }
   lastPsxReadTime = now;
 
-  byte l_x, l_y, l_b1, l_b2, l_bL;
-  byte lx_org, ly_org, b1_org, b2_org, bL_org;
-  byte rx_org, ry_org;
-  byte r_x, r_y;
-  int l_x_tmp, xy_tmp;
-  short jogx;
-
-  PsxControllerProtocol psxStickMode;
-
   // 接続されているPlayStation系コントローラーの有無を確認
   if (!haveController) {
-    // 未検出時はUSB列挙などの干渉を防ぐため、1秒間隔で接続を試みます
-    if (now - lastSearchTime >= 1000) {
-      lastSearchTime = now;
-      Serial.printf("[%lu] Searching for controller...\n", now);
-      if (psx.begin()) {
-        Serial.printf("[%lu] Controller found!\n", millis());
-        delay(300); // 接続直後の過渡状態が安定するのを待つ
-        
-        // 設定モードへ入り、コントローラーがスティックやアナログボタンを扱えるよう構成します
-        if (!psx.enterConfigMode()) {
-          Serial.printf("[%lu] Cannot enter config mode\n", millis());
-          psxContType = psx.getControllerType();
-          Serial.printf("[%lu] Controller Type is: %s\n", millis(), controllerTypeStrings[psxContType < PSCTRL_MAX ? static_cast<byte>(psxContType) : PSCTRL_MAX]);
-          psx.read();
-        } else {
-          psxContType = psx.getControllerType();
-          Serial.printf("[%lu] Controller Type is: %s\n", millis(), controllerTypeStrings[psxContType < PSCTRL_MAX ? static_cast<byte>(psxContType) : PSCTRL_MAX]);
-
-          // アナログスティック出力を有効化
-          if (!psx.enableAnalogSticks()) {
-            Serial.printf("[%lu] Cannot enable analog sticks\n", millis());
-          }
-          // アナログボタンの出力を有効化（neGconやDualShock 2などの各キーの感圧データ）
-          if (!psx.enableAnalogButtons()) {
-            Serial.printf("[%lu] Cannot enable analog buttons\n", millis());
-          }
-          // 初期化が完了したため、通常動作状態へ移行
-          if (!psx.exitConfigMode()) {
-            Serial.printf("[%lu] Cannot exit config mode\n", millis());
-          }
-        }
-
-        // 初回読込を行いプロトコル（デジタル/アナログなど）を取得・登録して検出を完了
-        psx.read();
-        psxStickMode = psx.getProtocol();
-        Serial.printf("[%lu] Controller Protocol is: %s\n", millis(), controllerProtoStrings[psxStickMode < PSPROTO_MAX ? static_cast<byte>(psxStickMode) : PSPROTO_MAX]);
-        haveController = true;
-      }
-    }
+    search_and_connect_controller(now);
   } else {
     // コントローラー接続中の毎フレーム（8msごと）の読込処理
     if (!psx.read()) {
-      // 読込失敗時はコントローラーが切断されたとみなし、状態をリセットして待機モードに移行
-      digitalWrite(PIN_GOODLED, HIGH); // 正常接続を示すLEDを消灯
-      Serial.printf("[%lu] Controller lost :x\n", millis());
-      haveController = false;
-      psxContType = PSCTRL_UNKNOWN;
-      psxStickMode = PSPROTO_UNKNOWN;
-      OldpsxStickMode = PSPROTO_UNKNOWN;
-      stickMode = MODE_LOST;
-
-      // ホストPCへのキー出力を無入力状態にリセット
-      xboxcontroller_reset();
-
+      disconnect_controller();
     } else {
-      digitalWrite(PIN_GOODLED, LOW); // 正常読込時はLEDを点灯
-      psxStickMode = psx.getProtocol();
-
-      // デバイスが切り替わった、またはアナログモードボタンが押されるなどしてプロトコルが変わった場合の検知
-      if (psxStickMode != OldpsxStickMode) {
-        if (psxStickMode == PSPROTO_DIGITAL) stickMode = MODE_STD;
-        if (psxStickMode == PSPROTO_FLIGHTSTICK) stickMode = MODE_AIRCON22;
-        if ((psxStickMode == PSPROTO_DUALSHOCK) || (psxStickMode == PSPROTO_DUALSHOCK2)) stickMode = MODE_STD;
-        if ((psxStickMode == PSPROTO_NEGCON) || (psxStickMode == PSPROTO_JOGCON)) stickMode = restoreNegStickMode(); // 内蔵設定を復元
-        
-        // Jogconが接続された場合のみ、追加でRumble（反力用）のセットアップを行います
-        if (psxStickMode == PSPROTO_JOGCON) {
-          delay(300);
-          if (psx.enterConfigMode()) {
-            Serial.printf("[%lu] Set Jogcon Rumble\n", millis());
-            if (!psx.enableJogconRumble()) {
-              Serial.printf("[%lu] Cannot enable Jogcon Rumble\n", millis());
-            }
-            if (!psx.exitConfigMode()) {
-              Serial.printf("[%lu] Cannot exit config mode\n", millis());
-            }
-          }
-        }
-        Serial.printf("[%lu] Controller Protocol is: %s\n", millis(), controllerProtoStrings[psxStickMode < PSPROTO_MAX ? static_cast<byte>(psxStickMode) : PSPROTO_MAX]);
-      }
-      OldpsxStickMode = psxStickMode;
-
-      // Xbox用レポートバッファのデジタルボタン状態のみ毎フレーム初期化（アナログ値は変化がない限り値を保持）
-      XboxButtonData.digital_buttons_1 = 0;
-      XboxButtonData.digital_buttons_2 = 0;
-
-      // メタSTARTボタン等の「100ms単発疑似クリック」用タイマー処理
-      if (menuOnUntil > 0) {
-        if (now < menuOnUntil) {
-          XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START;
-        } else {
-          menuOnUntil = 0;
-        }
-      }
-
-      // neGcon/Jogcon での START メタキー判定（STARTキーを長押し＋別キーでガイドボタンやL/R3ボタン等を疑似入力するための状態遷移）
-      if (psxStickMode == PSPROTO_NEGCON || psxStickMode == PSPROTO_JOGCON) {
-        uint16_t buttons = psx.getButtonWord();
-        bool startPressed = (buttons & PSB_START) != 0;
-        const uint16_t DIGITAL_BUTTONS_MASK = (PSB_PAD_UP | PSB_PAD_DOWN | PSB_PAD_LEFT | PSB_PAD_RIGHT | PSB_TRIANGLE | PSB_CIRCLE | PSB_R1);
-        bool anyDigitalPressed = (buttons & DIGITAL_BUTTONS_MASK) != 0;
-
-        switch (metaState) {
-          case META_STATE_IDLE:
-            // STARTボタンが押された時、他のデジタルキーが同時に押されていれば通常START入力、そうでなければメタ待機へ
-            if (startPressed) {
-              if (anyDigitalPressed) {
-                metaState = META_STATE_NORMAL_START;
-              } else {
-                metaState = META_STATE_START_PRESSED;
-              }
-            }
-            break;
-
-          case META_STATE_NORMAL_START:
-            // 通常START入力状態で、ボタンが離されたらIDLEへ戻る
-            if (!startPressed) {
-              metaState = META_STATE_IDLE;
-            }
-            break;
-
-          case META_STATE_START_PRESSED:
-            // START単体の押下中に、他のキーが押されずにボタンが離されたら、通常STARTとして100ms単発クリックを発行
-            if (!startPressed) {
-              menuOnUntil = millis() + 100;
-              metaState = META_STATE_IDLE;
-            } else if (anyDigitalPressed) {
-              // 他のキーが押されたらメタモードをアクティブ（長押し操作）にします
-              metaState = META_STATE_ACTIVE;
-            }
-            break;
-
-          case META_STATE_ACTIVE:
-            // すべてのキーが離されたらIDLEへ戻ります
-            if (!startPressed && !anyDigitalPressed) {
-              metaState = META_STATE_IDLE;
-            }
-            break;
-        }
-      } else {
-        // それ以外のデバイスではメタ操作を行わない
-        metaState = META_STATE_IDLE;
-      }
-
-      // コントローラーのプロトコルに応じたボタン・アナログ値の処理
-      switch (psxStickMode) {
-        // ==========================================
-        // SPCH-1110 FLIGHTSTICK モード（アナログスティック2本仕様）
-        // ==========================================
-        case PSPROTO_FLIGHTSTICK:
-          // 右スティック（アナログ値）の取得
-          if (psx.getRightAnalog(lx_org, ly_org)) {
-            l_x = lx_org;
-            l_y = ly_org;
-          } else {
-            l_x = 0x80;
-            l_y = 0x80;
-          }
-
-          // 左スティック（アナログ値）の取得
-          if (psx.getLeftAnalog(rx_org, ry_org)) {
-            r_x = rx_org;
-            r_y = ry_org;
-          } else {
-            r_x = 0x80;
-            r_y = 0x80;
-          }
-
-          // 値が変化した際、最大角（アナログキャリブレーション値）に基づき調整・スケーリング
-          if (l_x != slx || l_y != sly || r_x != srx || r_y != sry) {
-            slx = l_x;
-            sly = l_y;
-            srx = r_x;
-            sry = r_y;
-
-            l_x = (byte)adjustXY(l_x, analogLxMax);
-            l_y = (byte)adjustXY(l_y, analogLxMax);
-            r_x = (byte)adjustXY(r_x, analogLxMax);
-            r_y = (byte)adjustXY(r_y, analogLxMax);
-
-            // デバッグ表示用LED状態に反映
-            ledLx = l_x;
-            ledLy = l_y;
-            ledRx = r_x;
-            ledRy = r_y;
-          }
-
-          // Xboxコントローラー形式（±32767）にスケーリングして軸データへ代入
-          XboxButtonData.l_x = (int16_t)(((int32_t)l_x - 128) * 32767 / 128);
-          XboxButtonData.l_y = (int16_t)(((int32_t)l_y - 128) * 32767 / -128); // 上方向がプラス
-          XboxButtonData.r_x = (int16_t)(((int32_t)r_x - 128) * 32767 / 128);
-          XboxButtonData.r_y = (int16_t)(((int32_t)r_y - 128) * 32767 / -128);
-
-          // キャリブレーション設定モード中の処理
-          if (is_setting) {
-            // STARTボタン押下でUSB MSC（マスストレージ）へ再接続移行
-            if (psx.getButtonWord() & PSB_START) {
-              xboxcontroller_reconnect(true);
-            }
-            // CIRCLE（赤）ボタンで現在のスティック最大傾きを計測し、最大角としてEEPROMに保存します
-            if (psx.getButtonWord() & PSB_CIRCLE) {
-              Serial.printf("[%lu] Analog lxMax before: %d\n", millis(), analogLxMax);
-              l_x_tmp = absoluteXY(lx_org);
-
-              xy_tmp = absoluteXY(ly_org);
-              if (xy_tmp > l_x_tmp) l_x_tmp = xy_tmp;
-
-              xy_tmp = absoluteXY(rx_org);
-              if (xy_tmp > l_x_tmp) l_x_tmp = xy_tmp;
-
-              xy_tmp = absoluteXY(ry_org);
-              if (xy_tmp > l_x_tmp) l_x_tmp = xy_tmp;
-
-              // 傾きが小さすぎる（センター近辺）の場合は異常値とみなし、初期値(255)へ強制リセットします
-              if (l_x_tmp < (0x80 + 10)) l_x_tmp = 255;
-
-              analogLxMax = (byte)l_x_tmp;
-              Serial.printf("[%lu] EEP Write!\n", millis());
-              EEPROM.write(EEPADR_ANALOG_STICKMAX, analogLxMax);
-              EEPROM.commit();
-
-              Serial.printf("[%lu] Analog lxMax after: %d\n", millis(), analogLxMax);
-              stickMode = beforeStickMode; // 設定完了したため通常モードへ戻る
-            }
-          }
-
-          keyConvert_psx2xbox();
-          break;
-
-        // ==========================================
-        // neGcon モード（ハンドルねじり・I/IIアナログボタン仕様）
-        // ==========================================
-        case PSPROTO_NEGCON:
-          // スワップ（STD, SWAPAB, SWAPLTRT, SWAPAB_SWAPLTRT）を考慮したデジタルマッピング
-          if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
-            uint16_t buttons = psx.getButtonWord();
-
-            // START長押し＋各キーのメタモードがアクティブである場合のショートカットキー割り当て
-            if (metaState == META_STATE_ACTIVE) {
-              if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_Y;
-              if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_GUIDE; // ガイドボタン
-              if (buttons & PSB_PAD_LEFT)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER;
-              if (buttons & PSB_PAD_RIGHT) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
-              if (buttons & PSB_TRIANGLE)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_LEFT_THUMB;
-              if (buttons & PSB_CIRCLE)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_RIGHT_THUMB;
-              if (buttons & PSB_R1)        { XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START;
-                                             XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_RIGHT_SHOULDER; }
-              if (buttons & PSB_SELECT)
-                XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
-            } else {
-              // メタ長押しではない通常状態のキーマッピング
-              if (metaState != META_STATE_START_PRESSED) {
-                if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_UP;
-                if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_DOWN;
-                if (buttons & PSB_PAD_LEFT)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_LEFT;
-                if (buttons & PSB_PAD_RIGHT) XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_RIGHT;
-              }
-
-              if (metaState == META_STATE_NORMAL_START)
-                XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START;
-
-              if (metaState != META_STATE_START_PRESSED) {
-                if (buttons & PSB_R1)
-                  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
-              }
-
-              // Iボタン（Cross）= XInputのXボタン
-              if (buttons & PSB_CROSS)
-                XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_X;
-
-              if (buttons & PSB_SELECT)
-                XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
-
-              // A（Triangle）/ B（Circle）ボタンのマッピング。ABスワップ設定が有効なら入れ替えます
-              if (metaState != META_STATE_START_PRESSED) {
-                if (stickMode == MODE_SWAPAB || stickMode == MODE_SWAPAB_SWAPLTRT) {
-                  if (buttons & PSB_TRIANGLE)
-                    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
-                  if (buttons & PSB_CIRCLE)
-                    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
-                } else {
-                  if (buttons & PSB_TRIANGLE)
-                    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
-                  if (buttons & PSB_CIRCLE)
-                    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
-                }
-              }
-            }
-          } else {
-            keyConvert_psx2xbox();
-          }
-
-          // ねじりおよび感圧アナログ値（I、II、Lボタン）の読み込み
-          if (psx.getLeftAnalog(lx_org, ly_org)) {
-            b1_org = psx.getAnalogButton(PsxAnalogButton::PSAB_CROSS);
-            b2_org = psx.getAnalogButton(PsxAnalogButton::PSAB_SQUARE);
-            bL_org = psx.getAnalogButton(PsxAnalogButton::PSAB_L1);
-
-            l_x = lx_org;
-            l_x = (byte)adjustXY(l_x, lxMax); // ねじりのキャリブレーション補正
-            byte lx_scaled_no_play = l_x;
-
-            // 設定された遊びの削減値（デッドゾーン相殺）をねじり値に適用します
-            int lx_tmp = l_x;
-            int play = negReduceHandlePlay*2;
-            if (lx_tmp > 128) {
-              lx_tmp += play;
-              if (lx_tmp > 255) lx_tmp = 255;
-            } else if (lx_tmp < 128) {
-              lx_tmp -= play;
-              if (lx_tmp < 0) lx_tmp = 0;
-            }
-            l_x = (byte)lx_tmp;
-
-            // I/II/Lボタンのキャリブレーション補正（最大感圧に到達しやすくスケーリング）
-            l_b1 = b1_org / 2;
-            l_b1 = l_b1 * NEG_CALIB_B;
-            if (l_b1 > 0x80) l_b1 = 0x80;
-
-            l_b2 = b2_org / 2;
-            l_b2 = l_b2 * NEG_CALIB_B;
-            if (l_b2 > 0x7f) l_b2 = 0x7f;
-
-            l_bL = bL_org / 2;
-            l_bL = l_bL * 1;
-            if (l_bL > 0x7f) l_bL = 0x7f;
-
-            // START長押し中の誤作動防止とメタモード有効化（ねじり一定以上、またはI/II/Lが押されたらメタをACTIVE化）
-            if (metaState == META_STATE_START_PRESSED) {
-              if (abs((int)lx_scaled_no_play - 128) > 32 || l_b1 > 20 || l_b2 > 20 || l_bL > 20) {
-                metaState = META_STATE_ACTIVE;
-              }
-            }
-
-            // アナログトリガー(LT/RT)・右スティック軸へのマッピング代入
-            if (metaState == META_STATE_ACTIVE) {
-              digitalWrite(PIN_CONNECT, LOW);
-              XboxButtonData.lt = 0;
-              XboxButtonData.rt = 0;
-
-              // メタモード中：II/Lアナログボタンによる左スティックY軸の操作（スワップおよび上昇・下降向き）
-              int16_t stick_val = 0;
-              bool swapMode = (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT);
-
-              if (swapMode) {
-                if (l_b2 > 10) {
-                  stick_val = (int16_t)(((int32_t)l_b2) * 32767 / 127);
-                } else if (l_bL > 10) {
-                  stick_val = (int16_t)(((int32_t)l_bL) * -32768 / 127);
-                }
-              } else {
-                if (l_bL > 10) {
-                  stick_val = (int16_t)(((int32_t)l_bL) * 32767 / 127);
-                } else if (l_b2 > 10) {
-                  stick_val = (int16_t)(((int32_t)l_b2) * -32768 / 127);
-                }
-              }
-
-              XboxButtonData.l_y = stick_val;
-              XboxButtonData.l_x = 0;
-            } else {
-              // 通常モード時：アナログ値をLT/RTトリガーに割り当て（LTRTスワップ設定を考慮）
-              if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
-                digitalWrite(PIN_CONNECT, LOW);
-                
-                if (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
-                  uint16_t raw_rt = (uint16_t)l_b2 * 2;
-                  byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
-                  XboxButtonData.rt = applyAnalogCurve(rt_val, negLtCurve); // RTにIIボタン(カーブ適用)を代入
-
-                  uint16_t raw_lt = (uint16_t)l_bL * 2;
-                  byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
-                  XboxButtonData.lt = applyAnalogCurve(lt_val, negRtCurve); // LTにLボタン(カーブ適用)を代入
-                } else {
-                  uint16_t raw_lt = (uint16_t)l_b2 * 2;
-                  byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
-                  XboxButtonData.lt = applyAnalogCurve(lt_val, negLtCurve); // LTにIIボタン(カーブ適用)を代入
-
-                  uint16_t raw_rt = (uint16_t)l_bL * 2;
-                  byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
-                  XboxButtonData.rt = applyAnalogCurve(rt_val, negRtCurve); // RTにLボタン(カーブ適用)を代入
-                }
-              }
-              XboxButtonData.r_x = 0;
-              XboxButtonData.r_y = 0;
-            }
-
-            // 状態変化時にLED情報を更新
-            if (l_x != slx || l_b1 != sb1 || l_b2 != sb2 || l_bL != sbL) {
-              slx = l_x;
-              sb1 = l_b1;
-              sb2 = l_b2;
-              sbL = l_bL;
-
-              ledLx = l_x;
-              ledB1 = b1_org;
-              ledB2 = b2_org;
-              ledBL = bL_org;
-            }
-
-            // ねじりハンドル角度をXInputのアナログ軸に割り当て
-            if (metaState == META_STATE_ACTIVE) {
-              // メタモード中：ねじりを右アナログスティック（XまたはY方向。Iボタン押下でY方向、未押下でX方向）に割り当て
-              XboxButtonData.l_x = 0;
-
-              bool shift_Y = (l_b1 > 10);
-              int16_t twist_val = (int16_t)(((int32_t)l_x - 128) * 32767 / 128);
-              if (shift_Y) {
-                XboxButtonData.r_y = twist_val;
-                XboxButtonData.r_x = 0;
-              } else {
-                XboxButtonData.r_x = twist_val;
-                XboxButtonData.r_y = 0;
-              }
-            } else {
-              // 通常時：ねじりを左アナログスティックのX軸（ステアリング操作）に割り当て
-              XboxButtonData.l_x = (int16_t)(((int32_t)l_x - 128) * 32767 / 128);
-              XboxButtonData.l_y = 0;
-            }
-
-            // 設定モード時のパラメータ変更処理
-            if (is_setting) {
-              uint16_t buttons = psx.getButtonWord();
-              static uint16_t lastButtons = 0;
-
-              // L1ボタン（Lボタン）押下でRTアナログ感度カーブ（0:線形〜3:二次関数曲線）をローテーション変更しEEPROMに保存
-              if ((buttons & PSB_L1) && !(lastButtons & PSB_L1)) {
-                negRtCurve = (negRtCurve + 1) % 4;
-                EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, negRtCurve);
-                EEPROM.commit();
-                Serial.printf("[%lu] NEG_ANALOG_RT_CURVE: %d\n", millis(), negRtCurve);
-                ledFlashCount = negRtCurve + 1; // 変更後のカーブ種類をLED明滅回数で通知
-              }
-
-              // SQUAREボタン（IIボタン）押下でLTアナログ感度カーブをローテーション変更しEEPROMに保存
-              if ((buttons & PSB_SQUARE) && !(lastButtons & PSB_SQUARE)) {
-                negLtCurve = (negLtCurve + 1) % 4;
-                EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, negLtCurve);
-                EEPROM.commit();
-                Serial.printf("[%lu] NEG_ANALOG_LT_CURVE: %d\n", millis(), negLtCurve);
-                ledFlashCount = negLtCurve + 1; // 変更後のカーブ種類をLED明滅回数で通知
-              }
-
-              // 十字キー上ボタンでハンドルの遊び削減値（デッドゾーンの詰め量）を増加（感度を高める）しEEPROM保存
-              if ((buttons & PSB_PAD_UP) && !(lastButtons & PSB_PAD_UP)) {
-                if (negReduceHandlePlay < 32) {
-                  negReduceHandlePlay++;
-                  EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1);
-                  EEPROM.commit();
-                  Serial.printf("[%lu] NEG_REDUCE_HANDLE_PLAY: %d\n", millis(), negReduceHandlePlay);
-                }
-              }
-              // 十字キー下ボタンでハンドルの遊び削減値（デッドゾーンの詰め量）を減少（感度を下げる）しEEPROM保存
-              if ((buttons & PSB_PAD_DOWN) && !(lastButtons & PSB_PAD_DOWN)) {
-                if (negReduceHandlePlay > 0) {
-                  negReduceHandlePlay--;
-                  EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1);
-                  EEPROM.commit();
-                  Serial.printf("[%lu] NEG_REDUCE_HANDLE_PLAY: %d\n", millis(), negReduceHandlePlay);
-                }
-              }
-              // STARTボタン押下でUSB MSC（マスストレージ）接続モードへリブート
-              if ((buttons & PSB_START) && !(lastButtons & PSB_START)) {
-                xboxcontroller_reconnect(true);
-              }
-              // CIRCLE（赤）ボタン押下で、現在のハンドルねじり量を「最大ねじり角」としてキャリブレーション保存
-              if ((buttons & PSB_CIRCLE) && !(lastButtons & PSB_CIRCLE)) {
-                Serial.printf("[%lu] neG lxMax before: %d\n", millis(), lxMax);
-
-                l_x_tmp = absoluteXY(lx_org);
-                // センター近辺の無効値の場合は強制初期化
-                if (l_x_tmp < (0x80 + 10)) l_x_tmp = 0xff / ((NEG_CALIB - 1) / 2 + 1);
-
-                lxMax = (byte)l_x_tmp;
-                Serial.printf("[%lu] EEP Write!\n", millis());
-                EEPROM.write(EEPADR_NEG_NEGMAX, lxMax);
-                EEPROM.commit();
-
-                Serial.printf("[%lu] neG lxMax after: %d\n", millis(), lxMax);
-                stickMode = beforeStickMode; // 設定完了したため通常モードへ戻る
-              }
-
-              lastButtons = buttons;
-            }
-          }
-          break;
-
-        // ==========================================
-        // Jogcon モード（反力モーター・高分解能ダイヤルホイール・I/IIボタン感圧仕様）
-        // ==========================================
-        case PSPROTO_JOGCON:
-          {
-            // 標準の操作感に合わせるため、Iボタン（CROSS）とIIボタン（SQUARE）のデジタル入力を入れ替えます
-            uint16_t buttons = psx.getButtonWord();
-            uint16_t swapped_buttons = buttons & ~(PSB_CROSS | PSB_SQUARE);
-            if (buttons & PSB_CROSS) swapped_buttons |= PSB_SQUARE;
-            if (buttons & PSB_SQUARE) swapped_buttons |= PSB_CROSS;
-            buttons = swapped_buttons;
-
-            const uint16_t DIGITAL_BUTTONS_MASK = (PSB_PAD_UP | PSB_PAD_DOWN | PSB_PAD_LEFT | PSB_PAD_RIGHT | PSB_TRIANGLE | PSB_CIRCLE | PSB_R1);
-
-            // START長押し＋各キーのメタモードがアクティブである場合のショートカットキー割り当て
-            if (metaState == META_STATE_ACTIVE) {
-              if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_Y;
-              if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_GUIDE;
-              if (buttons & PSB_PAD_LEFT)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER;
-              if (buttons & PSB_PAD_RIGHT) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
-              if (buttons & PSB_TRIANGLE)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_LEFT_THUMB;
-              if (buttons & PSB_CIRCLE)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_RIGHT_THUMB;
-              if (buttons & PSB_R1)        { XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START ;
-                                             XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_RIGHT_SHOULDER; }
-
-              uint16_t other_buttons = buttons & ~(DIGITAL_BUTTONS_MASK | PSB_START);
-              keyConvert_psx2xbox_ex(other_buttons);
-            } else {
-              // メタ長押しではない通常状態のキーマッピング
-              uint16_t masked_buttons = buttons;
-
-              // START_PRESSED（メタ移行前の長押し待機中）は、デジタルボタン誤出力を防止するためマスクします
-              if (metaState == META_STATE_START_PRESSED) {
-                masked_buttons &= ~DIGITAL_BUTTONS_MASK;
-              }
-
-              // STARTボタン単体の処理
-              if (metaState == META_STATE_NORMAL_START) {
-                masked_buttons |= PSB_START;
-              } else {
-                masked_buttons &= ~PSB_START;
-              }
-
-              keyConvert_psx2xbox_ex(masked_buttons);
-
-              // ABスワップ設定が有効なら入れ替えます
-              if (stickMode == MODE_SWAPAB || stickMode == MODE_SWAPAB_SWAPLTRT) {
-                if (metaState != META_STATE_START_PRESSED) {
-                  uint8_t a_pressed = XboxButtonData.digital_buttons_2 & XINPUT_GAMEPAD_A;
-                  uint8_t b_pressed = XboxButtonData.digital_buttons_2 & XINPUT_GAMEPAD_B;
-                  XboxButtonData.digital_buttons_2 &= ~(XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B);
-                  if (a_pressed) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
-                  if (b_pressed) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
-                }
-              }
-            }
-          }
-
-          // ジョグダイヤルのアナログ値（回転位置）の読み込み
-          if (psx.getJogConAnalog(jogx)) {
-            // 設定された最大回転角（jogconDialMax）を超えて回された場合、反力モータを回してダイヤルを押し戻す反力（Forceback）を設定します
-            jogxForcePower = 0;
-            if (!is_setting) {
-              if (jogcon_abs_val(jogx) > jogconDialMax + JOG_MAX_AJST) {
-                jogxForcePower = (jogcon_abs_val(jogx) - (jogconDialMax + JOG_MAX_AJST)) / 2;
-                if (jogxForcePower > 0x0f) jogxForcePower = 0x0f;
-              }
-              if (jogxForcePower == 0) {
-                psx.setJogCommand(0x00); // 反力オフ
-              } else {
-                // コントローラー側に送信するパケットデータ（0x10〜:左方向反力, 0x20〜:右方向反力）を組み立てます
-                if (jogx < 0)
-                  psx.setJogCommand(0x10 | jogxForcePower & 0x0f);
-                else
-                  psx.setJogCommand(0x20 | (jogxForcePower & 0x0f));
-              }
-            }
-
-            // ダイヤルの回転量をXbox 360の左アナログスティックX軸の範囲（±32767）にマッピング
-            int32_t calc_lx = (int32_t)32767 * jogx / jogconDialMax;
-            if (calc_lx > 32767) calc_lx = 32767;
-            if (calc_lx < -32768) calc_lx = -32768;
-            l_x = 0x80 + (byte)(0x80 * jogx / jogconDialMax);
-            if (jogcon_abs_val(jogx) >= jogconDialMax) l_x = (jogx < 0) ? 0x00 : 0xff;
-
-            b1_org = 0x00;
-            b2_org = 0x00;
-
-            // I/II感圧ボタンの読み込み
-            if (psx.getButtonWord() & PSB_CROSS) b1_org = 0xff;
-            if (psx.getButtonWord() & PSB_SQUARE) b2_org = 0xff;
-
-            l_b1 = b1_org / 2;
-            l_b2 = b2_org / 2;
-
-            // 状態変化時にLED情報を更新
-            if (l_x != slx || l_b1 != sb1 || l_b2 != sb2 || l_bL != sbL) {
-              slx = l_x;
-              sb1 = l_b1;
-              sb2 = l_b2;
-              sbL = l_bL;
-
-              ledLx = l_x;
-              ledB1 = 0x00;
-              ledB2 = b2_org;
-              ledBL = bL_org;
-            }
-
-            // 最終的な値をセット (ハンドル)
-            XboxButtonData.l_x = (int16_t)calc_lx;
-            XboxButtonData.l_y = 0;
-
-            // ゲームモードが有効な場合アナログ値でアクセル・ブレーキが設定可能 (スワップ考慮)
-            if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
-              if (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
-                // LT/RT スワップ (I = RT, II = LT)
-                uint16_t raw_rt = (uint16_t)l_b1 * 2;
-                uint16_t raw_lt = (uint16_t)l_b2 * 2;
-                byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
-                byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
-                XboxButtonData.rt = applyAnalogCurve(rt_val, negLtCurve); // 物理Iボタンの補正を適用
-                XboxButtonData.lt = applyAnalogCurve(lt_val, negRtCurve); // 物理IIボタンの補正を適用
-              } else {
-                // 標準アサイン (I = LT, II = RT)
-                uint16_t raw_lt = (uint16_t)l_b1 * 2;
-                uint16_t raw_rt = (uint16_t)l_b2 * 2;
-                byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
-                byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
-                XboxButtonData.lt = applyAnalogCurve(lt_val, negLtCurve);
-                XboxButtonData.rt = applyAnalogCurve(rt_val, negRtCurve);
-              }
-            }
-
-            // 最大角、設定モード
-            if (stickMode == MODE_SETTING_NEG) {
-              if (jogxPosResetEnable < 100) {
-                if (jogcon_abs_val(jogx) > 4) {
-                  jogxPosResetEnable = 0;
-                  jogxForcePower = (jogcon_abs_val(jogx) / 2) + 1;
-                  if (jogxForcePower > 0x0f) jogxForcePower = 0x0f;
-
-                  if (jogx < 0) {
-                    psx.setJogCommand(0x10 | jogxForcePower);
-                  } else {
-                    psx.setJogCommand(0x20 | jogxForcePower);
-                  }
-                } else {
-                  jogxPosResetEnable++;
-                  psx.setJogCommand(0x00);
-                }
-              } else {
-                if (psx.getButtonWord() & PSB_START) {
-                  xboxcontroller_reconnect(true); // MSCモードへ移行（リセット）
-                }
-                if (psx.getButtonWord() & PSB_CIRCLE) {
-                  Serial.printf("[%lu] Jogcon jogconDialMax before: %d\n", millis(), jogconDialMax);
-                  //センターからの相対値に変更
-                  jogconDialMax = jogcon_abs_val(jogx);
-                  //センター値近辺の場合は初期値に設定
-                  if (jogconDialMax <= 8) jogconDialMax = 100;
-
-                  Serial.printf("[%lu] EEP Write!\n", millis());
-                  EEPROM.write(EEPADR_JOG_MAX_U, (byte)(jogconDialMax >> 8));
-                  EEPROM.write(EEPADR_JOG_MAX_L, (byte)(jogconDialMax & 0x00ff));
-                  EEPROM.commit();
-
-                  Serial.printf("[%lu] Jogcon jogconDialMax after: %d\n", millis(), jogconDialMax);
-                  stickMode = beforeStickMode;
-                }
-              }
-            } else {
-              jogxPosResetEnable = 0;
-            }
-          }
-          break;
-
-
-        // Dual Shock/2のボタン配置
-        case PSPROTO_DUALSHOCK2:
-        case PSPROTO_DUALSHOCK:
-          keyConvert_psx2xbox();
-
-          if (psx.getLeftAnalog(lx_org, ly_org)) {
-            l_x = lx_org;
-            l_y = ly_org;
-          } else {
-            l_x = 0x80;
-            l_y = 0x80;
-          }
-
-          if (psx.getRightAnalog(rx_org, ry_org)) {
-            r_x = rx_org;
-            r_y = ry_org;
-          } else {
-            r_x = 0x80;
-            r_y = 0x80;
-          }
-
-          if (l_x != slx || l_y != sly || r_x != srx || r_y != sry) {
-            slx = l_x;
-            sly = l_y;
-            srx = r_x;
-            sry = r_y;
-            ledLx = l_x;
-            ledLy = l_y;
-            ledRx = r_x;
-            ledRy = r_y;
-          }
-
-          // 軸の代入 (Xbox仕様にスケーリング)
-          XboxButtonData.l_x = (int16_t)(((int32_t)l_x - 128) * 32767 / 128);
-          XboxButtonData.l_y = (int16_t)(((int32_t)l_y - 128) * 32767 / -128); // 上がプラス
-          XboxButtonData.r_x = (int16_t)(((int32_t)r_x - 128) * 32767 / 128);
-          XboxButtonData.r_y = (int16_t)(((int32_t)r_y - 128) * 32767 / -128);
-          break;
-
-
-        default:
-          keyConvert_psx2xbox();
-          break;
-      }
-
-      // XInputデータ送信
-      send_xbox_report();
+      process_connected_controller(is_setting, now);
     }
   }
 
@@ -1895,5 +1210,750 @@ void loop() {
   } else {
     process_controller_mode();
   }
+}
+
+/// <summary>
+/// FLIGHTSTICK (SPCH-1110) の入力処理
+/// </summary>
+void process_flightstick(ControllerState *state) {
+  // 右スティック（アナログ値）の取得
+  if (psx.getRightAnalog(state->lx_org, state->ly_org)) {
+    state->l_x = state->lx_org;
+    state->l_y = state->ly_org;
+  } else {
+    state->l_x = 0x80;
+    state->l_y = 0x80;
+  }
+
+  // 左スティック（アナログ値）の取得
+  if (psx.getLeftAnalog(state->rx_org, state->ry_org)) {
+    state->r_x = state->rx_org;
+    state->r_y = state->ry_org;
+  } else {
+    state->r_x = 0x80;
+    state->r_y = 0x80;
+  }
+
+  // 値が変化した際、最大角（アナログキャリブレーション値）に基づき調整・スケーリング
+  if (state->l_x != slx || state->l_y != sly || state->r_x != srx || state->r_y != sry) {
+    slx = state->l_x;
+    sly = state->l_y;
+    srx = state->r_x;
+    sry = state->r_y;
+
+    state->l_x = (byte)adjustXY(state->l_x, analogLxMax);
+    state->l_y = (byte)adjustXY(state->l_y, analogLxMax);
+    state->r_x = (byte)adjustXY(state->r_x, analogLxMax);
+    state->r_y = (byte)adjustXY(state->r_y, analogLxMax);
+
+    // デバッグ表示用LED状態に反映
+    ledLx = state->l_x;
+    ledLy = state->l_y;
+    ledRx = state->r_x;
+    ledRy = state->r_y;
+  }
+
+  // Xboxコントローラー形式（±32767）にスケーリングして軸データへ代入
+  XboxButtonData.l_x = (int16_t)(((int32_t)state->l_x - 128) * 32767 / 128);
+  XboxButtonData.l_y = (int16_t)(((int32_t)state->l_y - 128) * 32767 / -128); // 上方向がプラス
+  XboxButtonData.r_x = (int16_t)(((int32_t)state->r_x - 128) * 32767 / 128);
+  XboxButtonData.r_y = (int16_t)(((int32_t)state->r_y - 128) * 32767 / -128);
+
+  // キャリブレーション設定モード中の処理
+  if (state->is_setting) {
+    // STARTボタン押下でUSB MSC（マスストレージ）へ再接続移行
+    if (psx.getButtonWord() & PSB_START) {
+      xboxcontroller_reconnect(true);
+    }
+    // CIRCLE（赤）ボタンで現在のスティック最大傾きを計測し、最大角としてEEPROMに保存します
+    if (psx.getButtonWord() & PSB_CIRCLE) {
+      Serial.printf("[%lu] Analog lxMax before: %d\n", millis(), analogLxMax);
+      state->l_x_tmp = absoluteXY(state->lx_org);
+
+      state->xy_tmp = absoluteXY(state->ly_org);
+      if (state->xy_tmp > state->l_x_tmp) state->l_x_tmp = state->xy_tmp;
+
+      state->xy_tmp = absoluteXY(state->rx_org);
+      if (state->xy_tmp > state->l_x_tmp) state->l_x_tmp = state->xy_tmp;
+
+      state->xy_tmp = absoluteXY(state->ry_org);
+      if (state->xy_tmp > state->l_x_tmp) state->l_x_tmp = state->xy_tmp;
+
+      // 傾きが小さすぎる（センター近辺）の場合は異常値とみなし、初期値(255)へ強制リセットします
+      if (state->l_x_tmp < (0x80 + 10)) state->l_x_tmp = 255;
+
+      analogLxMax = (byte)state->l_x_tmp;
+      Serial.printf("[%lu] EEP Write!\n", millis());
+      EEPROM.write(EEPADR_ANALOG_STICKMAX, analogLxMax);
+      EEPROM.commit();
+
+      Serial.printf("[%lu] Analog lxMax after: %d\n", millis(), analogLxMax);
+      stickMode = beforeStickMode; // 設定完了したため通常モードへ戻る
+    }
+  }
+
+  keyConvert_psx2xbox();
+}
+
+/// <summary>
+/// neGcon の入力処理
+/// </summary>
+void process_negcon(ControllerState *state) {
+  // スワップ（STD, SWAPAB, SWAPLTRT, SWAPAB_SWAPLTRT）を考慮したデジタルマッピング
+  if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+    uint16_t buttons = psx.getButtonWord();
+
+    // START長押し＋各キーのメタモードがアクティブである場合のショートカットキー割り当て
+    if (metaState == META_STATE_ACTIVE) {
+      if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_Y;
+      if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_GUIDE; // ガイドボタン
+      if (buttons & PSB_PAD_LEFT)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER;
+      if (buttons & PSB_PAD_RIGHT) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
+      if (buttons & PSB_TRIANGLE)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_LEFT_THUMB;
+      if (buttons & PSB_CIRCLE)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_RIGHT_THUMB;
+      if (buttons & PSB_R1)        { XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START;
+                                     XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_RIGHT_SHOULDER; }
+      if (buttons & PSB_SELECT)
+        XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
+    } else {
+      // メタ長押しではない通常状態のキーマッピング
+      if (metaState != META_STATE_START_PRESSED) {
+        if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_UP;
+        if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_DOWN;
+        if (buttons & PSB_PAD_LEFT)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_LEFT;
+        if (buttons & PSB_PAD_RIGHT) XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_RIGHT;
+      }
+
+      if (metaState == META_STATE_NORMAL_START)
+        XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START;
+
+      if (metaState != META_STATE_START_PRESSED) {
+        if (buttons & PSB_R1)
+          XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
+      }
+
+      // Iボタン（Cross）= XInputのXボタン
+      if (buttons & PSB_CROSS)
+        XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_X;
+
+      if (buttons & PSB_SELECT)
+        XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_BACK;
+
+      // A（Triangle）/ B（Circle）ボタンのマッピング。ABスワップ設定が有効なら入れ替えます
+      if (metaState != META_STATE_START_PRESSED) {
+        if (stickMode == MODE_SWAPAB || stickMode == MODE_SWAPAB_SWAPLTRT) {
+          if (buttons & PSB_TRIANGLE)
+            XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
+          if (buttons & PSB_CIRCLE)
+            XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
+        } else {
+          if (buttons & PSB_TRIANGLE)
+            XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
+          if (buttons & PSB_CIRCLE)
+            XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
+        }
+      }
+    }
+  } else {
+    keyConvert_psx2xbox();
+  }
+
+  // ねじりおよび感圧アナログ値（I、II、Lボタン）の読み込み
+  if (psx.getLeftAnalog(state->lx_org, state->ly_org)) {
+    state->b1_org = psx.getAnalogButton(PsxAnalogButton::PSAB_CROSS);
+    state->b2_org = psx.getAnalogButton(PsxAnalogButton::PSAB_SQUARE);
+    state->bL_org = psx.getAnalogButton(PsxAnalogButton::PSAB_L1);
+
+    state->l_x = state->lx_org;
+    state->l_x = (byte)adjustXY(state->l_x, lxMax); // ねじりのキャリブレーション補正
+    byte lx_scaled_no_play = state->l_x;
+
+    // 設定された遊びの削減値（デッドゾーン相殺）をねじり値に適用します
+    int lx_tmp = state->l_x;
+    int play = negReduceHandlePlay*2;
+    if (lx_tmp > 128) {
+      lx_tmp += play;
+      if (lx_tmp > 255) lx_tmp = 255;
+    } else if (lx_tmp < 128) {
+      lx_tmp -= play;
+      if (lx_tmp < 0) lx_tmp = 0;
+    }
+    state->l_x = (byte)lx_tmp;
+
+    // I/II/Lボタンのキャリブレーション補正（最大感圧に到達しやすくスケーリング）
+    state->l_b1 = state->b1_org / 2;
+    state->l_b1 = state->l_b1 * NEG_CALIB_B;
+    if (state->l_b1 > 0x80) state->l_b1 = 0x80;
+
+    state->l_b2 = state->b2_org / 2;
+    state->l_b2 = state->l_b2 * NEG_CALIB_B;
+    if (state->l_b2 > 0x7f) state->l_b2 = 0x7f;
+
+    state->l_bL = state->bL_org / 2;
+    state->l_bL = state->l_bL * 1;
+    if (state->l_bL > 0x7f) state->l_bL = 0x7f;
+
+    // START長押し中の誤作動防止とメタモード有効化（ねじり一定以上、またはI/II/Lが押されたらメタをACTIVE化）
+    if (metaState == META_STATE_START_PRESSED) {
+      if (abs((int)lx_scaled_no_play - 128) > 32 || state->l_b1 > 20 || state->l_b2 > 20 || state->l_bL > 20) {
+        metaState = META_STATE_ACTIVE;
+      }
+    }
+
+    // アナログトリガー(LT/RT)・右スティック軸へのマッピング代入
+    if (metaState == META_STATE_ACTIVE) {
+      digitalWrite(PIN_CONNECT, LOW);
+      XboxButtonData.lt = 0;
+      XboxButtonData.rt = 0;
+
+      // メタモード中：II/Lアナログボタンによる左スティックY軸の操作（スワップおよび上昇・下降向き）
+      int16_t stick_val = 0;
+      bool swapMode = (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT);
+
+      if (swapMode) {
+        if (state->l_b2 > 10) {
+          stick_val = (int16_t)(((int32_t)state->l_b2) * 32767 / 127);
+        } else if (state->l_bL > 10) {
+          stick_val = (int16_t)(((int32_t)state->l_bL) * -32768 / 127);
+        }
+      } else {
+        if (state->l_bL > 10) {
+          stick_val = (int16_t)(((int32_t)state->l_bL) * 32767 / 127);
+        } else if (state->l_b2 > 10) {
+          stick_val = (int16_t)(((int32_t)state->l_b2) * -32768 / 127);
+        }
+      }
+
+      XboxButtonData.l_y = stick_val;
+      XboxButtonData.l_x = 0;
+    } else {
+      // 通常モード時：アナログ値をLT/RTトリガーに割り当て（LTRTスワップ設定を考慮）
+      if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+        digitalWrite(PIN_CONNECT, LOW);
+        
+        if (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+          uint16_t raw_rt = (uint16_t)state->l_b2 * 2;
+          byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
+          XboxButtonData.rt = applyAnalogCurve(rt_val, negLtCurve); // RTにIIボタン(カーブ適用)を代入
+
+          uint16_t raw_lt = (uint16_t)state->l_bL * 2;
+          byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
+          XboxButtonData.lt = applyAnalogCurve(lt_val, negRtCurve); // LTにLボタン(カーブ適用)を代入
+        } else {
+          uint16_t raw_lt = (uint16_t)state->l_b2 * 2;
+          byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
+          XboxButtonData.lt = applyAnalogCurve(lt_val, negLtCurve); // LTにIIボタン(カーブ適用)を代入
+
+          uint16_t raw_rt = (uint16_t)state->l_bL * 2;
+          byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
+          XboxButtonData.rt = applyAnalogCurve(rt_val, negRtCurve); // RTにLボタン(カーブ適用)を代入
+        }
+      }
+      XboxButtonData.r_x = 0;
+      XboxButtonData.r_y = 0;
+    }
+
+    // 状態変化時にLED情報を更新
+    if (state->l_x != slx || state->l_b1 != sb1 || state->l_b2 != sb2 || state->l_bL != sbL) {
+      slx = state->l_x;
+      sb1 = state->l_b1;
+      sb2 = state->l_b2;
+      sbL = state->l_bL;
+
+      ledLx = state->l_x;
+      ledB1 = state->b1_org;
+      ledB2 = state->b2_org;
+      ledBL = state->bL_org;
+    }
+
+    // ねじりハンドル角度をXInputのアナログ軸に割り当て
+    if (metaState == META_STATE_ACTIVE) {
+      // メタモード中：ねじりを右アナログスティック（XまたはY方向。Iボタン押下でY方向、未押下でX方向）に割り当て
+      XboxButtonData.l_x = 0;
+
+      bool shift_Y = (state->l_b1 > 10);
+      int16_t twist_val = (int16_t)(((int32_t)state->l_x - 128) * 32767 / 128);
+      if (shift_Y) {
+        XboxButtonData.r_y = twist_val;
+        XboxButtonData.r_x = 0;
+      } else {
+        XboxButtonData.r_x = twist_val;
+        XboxButtonData.r_y = 0;
+      }
+    } else {
+      // 通常時：ねじりを左アナログスティックのX軸（ステアリング操作）に割り当て
+      XboxButtonData.l_x = (int16_t)(((int32_t)state->l_x - 128) * 32767 / 128);
+      XboxButtonData.l_y = 0;
+    }
+
+    // 設定モード時のパラメータ変更処理
+    if (state->is_setting) {
+      uint16_t buttons = psx.getButtonWord();
+      static uint16_t lastButtons = 0;
+
+      // L1ボタン（Lボタン）押下でRTアナログ感度カーブ（0:線形〜3:二次関数曲線）をローテーション変更しEEPROMに保存
+      if ((buttons & PSB_L1) && !(lastButtons & PSB_L1)) {
+        negRtCurve = (negRtCurve + 1) % 4;
+        EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, negRtCurve);
+        EEPROM.commit();
+        Serial.printf("[%lu] NEG_ANALOG_RT_CURVE: %d\n", millis(), negRtCurve);
+        ledFlashCount = negRtCurve + 1; // 変更後のカーブ種類をLED明滅回数で通知
+      }
+
+      // SQUAREボタン（IIボタン）押下でLTアナログ感度カーブをローテーション変更しEEPROMに保存
+      if ((buttons & PSB_SQUARE) && !(lastButtons & PSB_SQUARE)) {
+        negLtCurve = (negLtCurve + 1) % 4;
+        EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, negLtCurve);
+        EEPROM.commit();
+        Serial.printf("[%lu] NEG_ANALOG_LT_CURVE: %d\n", millis(), negLtCurve);
+        ledFlashCount = negLtCurve + 1; // 変更後のカーブ種類をLED明滅回数で通知
+      }
+
+      // 十字キー上ボタンでハンドルの遊び削減値（デッドゾーンの詰め量）を増加（感度を高める）しEEPROM保存
+      if ((buttons & PSB_PAD_UP) && !(lastButtons & PSB_PAD_UP)) {
+        if (negReduceHandlePlay < 32) {
+          negReduceHandlePlay++;
+          EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1);
+          EEPROM.commit();
+          Serial.printf("[%lu] NEG_REDUCE_HANDLE_PLAY: %d\n", millis(), negReduceHandlePlay);
+        }
+      }
+      // 十字キー下ボタンでハンドルの遊び削減値（デッドゾーンの詰め量）を減少（感度を下げる）しEEPROM保存
+      if ((buttons & PSB_PAD_DOWN) && !(lastButtons & PSB_PAD_DOWN)) {
+        if (negReduceHandlePlay > 0) {
+          negReduceHandlePlay--;
+          EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1);
+          EEPROM.commit();
+          Serial.printf("[%lu] NEG_REDUCE_HANDLE_PLAY: %d\n", millis(), negReduceHandlePlay);
+        }
+      }
+      // STARTボタン押下でUSB MSC（マスストレージ）接続モードへリブート
+      if ((buttons & PSB_START) && !(lastButtons & PSB_START)) {
+        xboxcontroller_reconnect(true);
+      }
+      // CIRCLE（赤）ボタン押下で、現在のハンドルねじり量を「最大ねじり角」としてキャリブレーション保存
+      if ((buttons & PSB_CIRCLE) && !(lastButtons & PSB_CIRCLE)) {
+        Serial.printf("[%lu] neG lxMax before: %d\n", millis(), lxMax);
+
+        state->l_x_tmp = absoluteXY(state->lx_org);
+        // センター近辺の無効値の場合は強制初期化
+        if (state->l_x_tmp < (0x80 + 10)) state->l_x_tmp = 0xff / ((NEG_CALIB - 1) / 2 + 1);
+
+        lxMax = (byte)state->l_x_tmp;
+        Serial.printf("[%lu] EEP Write!\n", millis());
+        EEPROM.write(EEPADR_NEG_NEGMAX, lxMax);
+        EEPROM.commit();
+
+        Serial.printf("[%lu] neG lxMax after: %d\n", millis(), lxMax);
+        stickMode = beforeStickMode; // 設定完了したため通常モードへ戻る
+      }
+
+      lastButtons = buttons;
+    }
+  }
+}
+
+/// <summary>
+/// Jogcon の入力処理
+/// </summary>
+void process_jogcon(ControllerState *state) {
+  // 標準の操作感に合わせるため、Iボタン（CROSS）とIIボタン（SQUARE）のデジタル入力を入れ替えます
+  uint16_t buttons = psx.getButtonWord();
+  uint16_t swapped_buttons = buttons & ~(PSB_CROSS | PSB_SQUARE);
+  if (buttons & PSB_CROSS) swapped_buttons |= PSB_SQUARE;
+  if (buttons & PSB_SQUARE) swapped_buttons |= PSB_CROSS;
+  buttons = swapped_buttons;
+
+  const uint16_t DIGITAL_BUTTONS_MASK = (PSB_PAD_UP | PSB_PAD_DOWN | PSB_PAD_LEFT | PSB_PAD_RIGHT | PSB_TRIANGLE | PSB_CIRCLE | PSB_R1);
+
+  // START長押し＋各キーのメタモードがアクティブである場合のショートカットキー割り当て
+  if (metaState == META_STATE_ACTIVE) {
+    if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_Y;
+    if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_GUIDE;
+    if (buttons & PSB_PAD_LEFT)  XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_LEFT_SHOULDER;
+    if (buttons & PSB_PAD_RIGHT) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
+    if (buttons & PSB_TRIANGLE)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_LEFT_THUMB;
+    if (buttons & PSB_CIRCLE)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_RIGHT_THUMB;
+    if (buttons & PSB_R1)        { XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START ;
+                                   XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_RIGHT_SHOULDER; }
+
+    uint16_t other_buttons = buttons & ~(DIGITAL_BUTTONS_MASK | PSB_START);
+    keyConvert_psx2xbox_ex(other_buttons);
+  } else {
+    // メタ長押しではない通常状態のキーマッピング
+    uint16_t masked_buttons = buttons;
+
+    // START_PRESSED（メタ移行前の長押し待機中）は、デジタルボタン誤出力を防止するためマスクします
+    if (metaState == META_STATE_START_PRESSED) {
+      masked_buttons &= ~DIGITAL_BUTTONS_MASK;
+    }
+
+    // STARTボタン単体の処理
+    if (metaState == META_STATE_NORMAL_START) {
+      masked_buttons |= PSB_START;
+    } else {
+      masked_buttons &= ~PSB_START;
+    }
+
+    keyConvert_psx2xbox_ex(masked_buttons);
+
+    // ABスワップ設定が有効なら入れ替えます
+    if (stickMode == MODE_SWAPAB || stickMode == MODE_SWAPAB_SWAPLTRT) {
+      if (metaState != META_STATE_START_PRESSED) {
+        uint8_t a_pressed = XboxButtonData.digital_buttons_2 & XINPUT_GAMEPAD_A;
+        uint8_t b_pressed = XboxButtonData.digital_buttons_2 & XINPUT_GAMEPAD_B;
+        XboxButtonData.digital_buttons_2 &= ~(XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B);
+        if (a_pressed) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
+        if (b_pressed) XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_A;
+      }
+    }
+  }
+
+  // ジョグダイヤルのアナログ値（回転位置）の読み込み
+  if (psx.getJogConAnalog(state->jogx)) {
+    // 設定された最大回転角（jogconDialMax）を超えて回された場合、反力モータを回してダイヤルを押し戻す反力（Forceback）を設定します
+    jogxForcePower = 0;
+    if (!state->is_setting) {
+      if (jogcon_abs_val(state->jogx) > jogconDialMax + JOG_MAX_AJST) {
+        jogxForcePower = (jogcon_abs_val(state->jogx) - (jogconDialMax + JOG_MAX_AJST)) / 2;
+        if (jogxForcePower > 0x0f) jogxForcePower = 0x0f;
+      }
+      if (jogxForcePower == 0) {
+        psx.setJogCommand(0x00); // 反力オフ
+      } else {
+        // コントローラー側に送信するパケットデータ（0x10〜:左方向反力, 0x20〜:右方向反力）を組み立てます
+        if (state->jogx < 0)
+          psx.setJogCommand(0x10 | jogxForcePower & 0x0f);
+        else
+          psx.setJogCommand(0x20 | (jogxForcePower & 0x0f));
+      }
+    }
+
+    // ダイヤルの回転量をXbox 360の左アナログスティックX軸の範囲（±32767）にマッピング
+    int32_t calc_lx = (int32_t)32767 * state->jogx / jogconDialMax;
+    if (calc_lx > 32767) calc_lx = 32767;
+    if (calc_lx < -32768) calc_lx = -32768;
+    state->l_x = 0x80 + (byte)(0x80 * state->jogx / jogconDialMax);
+    if (jogcon_abs_val(state->jogx) >= jogconDialMax) state->l_x = (state->jogx < 0) ? 0x00 : 0xff;
+
+    state->b1_org = 0x00;
+    state->b2_org = 0x00;
+
+    // I/II感圧ボタンの読み込み
+    if (psx.getButtonWord() & PSB_CROSS) state->b1_org = 0xff;
+    if (psx.getButtonWord() & PSB_SQUARE) state->b2_org = 0xff;
+
+    state->l_b1 = state->b1_org / 2;
+    state->l_b2 = state->b2_org / 2;
+
+    // 状態変化時にLED情報を更新
+    if (state->l_x != slx || state->l_b1 != sb1 || state->l_b2 != sb2 || state->l_bL != sbL) {
+      slx = state->l_x;
+      sb1 = state->l_b1;
+      sb2 = state->l_b2;
+      sbL = state->l_bL;
+
+      ledLx = state->l_x;
+      ledB1 = 0x00;
+      ledB2 = state->b2_org;
+      ledBL = state->bL_org;
+    }
+
+    // 最終的な値をセット (ハンドル)
+    XboxButtonData.l_x = (int16_t)calc_lx;
+    XboxButtonData.l_y = 0;
+
+    // ゲームモードが有効な場合アナログ値でアクセル・ブレーキが設定可能 (スワップ考慮)
+    if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+      if (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+        // LT/RT スワップ (I = RT, II = LT)
+        uint16_t raw_rt = (uint16_t)state->l_b1 * 2;
+        uint16_t raw_lt = (uint16_t)state->l_b2 * 2;
+        byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
+        byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
+        XboxButtonData.rt = applyAnalogCurve(rt_val, negLtCurve); // 物理Iボタンの補正を適用
+        XboxButtonData.lt = applyAnalogCurve(lt_val, negRtCurve); // 物理IIボタンの補正を適用
+      } else {
+        // 標準アサイン (I = LT, II = RT)
+        uint16_t raw_lt = (uint16_t)state->l_b1 * 2;
+        uint16_t raw_rt = (uint16_t)state->l_b2 * 2;
+        byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
+        byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
+        XboxButtonData.lt = applyAnalogCurve(lt_val, negLtCurve);
+        XboxButtonData.rt = applyAnalogCurve(rt_val, negRtCurve);
+      }
+    }
+
+    // 最大角、設定モード
+    if (stickMode == MODE_SETTING_NEG) {
+      if (jogxPosResetEnable < 100) {
+        if (jogcon_abs_val(state->jogx) > 4) {
+          jogxPosResetEnable = 0;
+          jogxForcePower = (jogcon_abs_val(state->jogx) / 2) + 1;
+          if (jogxForcePower > 0x0f) jogxForcePower = 0x0f;
+
+          if (state->jogx < 0) {
+            psx.setJogCommand(0x10 | jogxForcePower);
+          } else {
+            psx.setJogCommand(0x20 | jogxForcePower);
+          }
+        } else {
+          jogxPosResetEnable++;
+          psx.setJogCommand(0x00);
+        }
+      } else {
+        if (psx.getButtonWord() & PSB_START) {
+          xboxcontroller_reconnect(true); // MSCモードへ移行（リセット）
+        }
+        if (psx.getButtonWord() & PSB_CIRCLE) {
+          Serial.printf("[%lu] Jogcon jogconDialMax before: %d\n", millis(), jogconDialMax);
+          //センターからの相対値に変更
+          jogconDialMax = jogcon_abs_val(state->jogx);
+          //センター値近辺の場合は初期値に設定
+          if (jogconDialMax <= 8) jogconDialMax = 100;
+
+          Serial.printf("[%lu] EEP Write!\n", millis());
+          EEPROM.write(EEPADR_JOG_MAX_U, (byte)(jogconDialMax >> 8));
+          EEPROM.write(EEPADR_JOG_MAX_L, (byte)(jogconDialMax & 0x00ff));
+          EEPROM.commit();
+
+          Serial.printf("[%lu] Jogcon jogconDialMax after: %d\n", millis(), jogconDialMax);
+          stickMode = beforeStickMode;
+        }
+      }
+    } else {
+      jogxPosResetEnable = 0;
+    }
+  }
+}
+
+/// <summary>
+/// DualShock / DualShock 2 の入力処理
+/// </summary>
+void process_dualshock(ControllerState *state) {
+  keyConvert_psx2xbox();
+
+  if (psx.getLeftAnalog(state->lx_org, state->ly_org)) {
+    state->l_x = state->lx_org;
+    state->l_y = state->ly_org;
+  } else {
+    state->l_x = 0x80;
+    state->l_y = 0x80;
+  }
+
+  if (psx.getRightAnalog(state->rx_org, state->ry_org)) {
+    state->r_x = state->rx_org;
+    state->r_y = state->ry_org;
+  } else {
+    state->r_x = 0x80;
+    state->r_y = 0x80;
+  }
+
+  if (state->l_x != slx || state->l_y != sly || state->r_x != srx || state->r_y != sry) {
+    slx = state->l_x;
+    sly = state->l_y;
+    srx = state->r_x;
+    sry = state->r_y;
+    ledLx = state->l_x;
+    ledLy = state->l_y;
+    ledRx = state->r_x;
+    ledRy = state->r_y;
+  }
+
+  // 軸の代入 (Xbox仕様にスケーリング)
+  XboxButtonData.l_x = (int16_t)(((int32_t)state->l_x - 128) * 32767 / 128);
+  XboxButtonData.l_y = (int16_t)(((int32_t)state->l_y - 128) * 32767 / -128); // 上がプラス
+  XboxButtonData.r_x = (int16_t)(((int32_t)state->r_x - 128) * 32767 / 128);
+  XboxButtonData.r_y = (int16_t)(((int32_t)state->r_y - 128) * 32767 / -128);
+}
+
+/// <summary>
+/// 未対応・デフォルトコントローラーの入力処理
+/// </summary>
+void process_default_controller(ControllerState *state) {
+  keyConvert_psx2xbox();
+}
+
+/// <summary>
+/// コントローラー未接続時の接続試行処理
+/// </summary>
+void search_and_connect_controller(unsigned long now) {
+  // 未検出時はUSB列挙などの干渉を防ぐため、1秒間隔で接続を試みます
+  if (now - lastSearchTime < 1000) return;
+  lastSearchTime = now;
+  Serial.printf("[%lu] Searching for controller...\n", now);
+  if (!psx.begin()) return;
+
+  Serial.printf("[%lu] Controller found!\n", millis());
+  delay(300); // 接続直後の過渡状態が安定するのを待つ
+
+  // 設定モードへ入り、コントローラーがスティックやアナログボタンを扱えるよう構成します
+  if (!psx.enterConfigMode()) {
+    Serial.printf("[%lu] Cannot enter config mode\n", millis());
+    psxContType = psx.getControllerType();
+    Serial.printf("[%lu] Controller Type is: %s\n", millis(), controllerTypeStrings[psxContType < PSCTRL_MAX ? static_cast<byte>(psxContType) : PSCTRL_MAX]);
+    psx.read();
+  } else {
+    psxContType = psx.getControllerType();
+    Serial.printf("[%lu] Controller Type is: %s\n", millis(), controllerTypeStrings[psxContType < PSCTRL_MAX ? static_cast<byte>(psxContType) : PSCTRL_MAX]);
+
+    // アナログスティック出力を有効化
+    if (!psx.enableAnalogSticks()) {
+      Serial.printf("[%lu] Cannot enable analog sticks\n", millis());
+    }
+    // アナログボタンの出力を有効化（neGconやDualShock 2などの各キーの感圧データ）
+    if (!psx.enableAnalogButtons()) {
+      Serial.printf("[%lu] Cannot enable analog buttons\n", millis());
+    }
+    // 初期化が完了したため、通常動作状態へ移行
+    if (!psx.exitConfigMode()) {
+      Serial.printf("[%lu] Cannot exit config mode\n", millis());
+    }
+  }
+
+  // 初回読込を行いプロトコル（デジタル/アナログなど）を取得・登録して検出を完了
+  psx.read();
+  PsxControllerProtocol proto = psx.getProtocol();
+  Serial.printf("[%lu] Controller Protocol is: %s\n", millis(), controllerProtoStrings[proto < PSPROTO_MAX ? static_cast<byte>(proto) : PSPROTO_MAX]);
+  haveController = true;
+}
+
+/// <summary>
+/// コントローラー切断時のリセット処理
+/// </summary>
+void disconnect_controller() {
+  digitalWrite(PIN_GOODLED, HIGH); // 正常接続を示すLEDを消灯
+  Serial.printf("[%lu] Controller lost :x\n", millis());
+  haveController = false;
+  psxContType = PSCTRL_UNKNOWN;
+  OldpsxStickMode = PSPROTO_UNKNOWN;
+  stickMode = MODE_LOST;
+
+  // ホストPCへのキー出力を無入力状態にリセット
+  xboxcontroller_reset();
+}
+
+/// <summary>
+/// コントローラー接続中の毎フレーム処理（プロトコル判定・メタキー・入力変換）
+/// </summary>
+void process_connected_controller(bool is_setting, unsigned long now) {
+  digitalWrite(PIN_GOODLED, LOW); // 正常読込時はLEDを点灯
+  PsxControllerProtocol psxStickMode = psx.getProtocol();
+
+  // デバイスが切り替わった、またはアナログモードボタンが押されるなどしてプロトコルが変わった場合の検知
+  if (psxStickMode != OldpsxStickMode) {
+    if (psxStickMode == PSPROTO_DIGITAL) stickMode = MODE_STD;
+    if (psxStickMode == PSPROTO_FLIGHTSTICK) stickMode = MODE_AIRCON22;
+    if ((psxStickMode == PSPROTO_DUALSHOCK) || (psxStickMode == PSPROTO_DUALSHOCK2)) stickMode = MODE_STD;
+    if ((psxStickMode == PSPROTO_NEGCON) || (psxStickMode == PSPROTO_JOGCON)) stickMode = restoreNegStickMode(); // 内蔵設定を復元
+
+    // Jogconが接続された場合のみ、追加でRumble（反力用）のセットアップを行います
+    if (psxStickMode == PSPROTO_JOGCON) {
+      delay(300);
+      if (psx.enterConfigMode()) {
+        Serial.printf("[%lu] Set Jogcon Rumble\n", millis());
+        if (!psx.enableJogconRumble()) {
+          Serial.printf("[%lu] Cannot enable Jogcon Rumble\n", millis());
+        }
+        if (!psx.exitConfigMode()) {
+          Serial.printf("[%lu] Cannot exit config mode\n", millis());
+        }
+      }
+    }
+    Serial.printf("[%lu] Controller Protocol is: %s\n", millis(), controllerProtoStrings[psxStickMode < PSPROTO_MAX ? static_cast<byte>(psxStickMode) : PSPROTO_MAX]);
+  }
+  OldpsxStickMode = psxStickMode;
+
+  // Xbox用レポートバッファのデジタルボタン状態のみ毎フレーム初期化（アナログ値は変化がない限り値を保持）
+  XboxButtonData.digital_buttons_1 = 0;
+  XboxButtonData.digital_buttons_2 = 0;
+
+  // メタSTARTボタン等の「100ms単発疑似クリック」用タイマー処理
+  if (menuOnUntil > 0) {
+    if (now < menuOnUntil) {
+      XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_START;
+    } else {
+      menuOnUntil = 0;
+    }
+  }
+
+  // neGcon/Jogcon での START メタキー判定（STARTキーを長押し＋別キーでガイドボタンやL/R3ボタン等を疑似入力するための状態遷移）
+  if (psxStickMode == PSPROTO_NEGCON || psxStickMode == PSPROTO_JOGCON) {
+    uint16_t buttons = psx.getButtonWord();
+    bool startPressed = (buttons & PSB_START) != 0;
+    const uint16_t DIGITAL_BUTTONS_MASK = (PSB_PAD_UP | PSB_PAD_DOWN | PSB_PAD_LEFT | PSB_PAD_RIGHT | PSB_TRIANGLE | PSB_CIRCLE | PSB_R1);
+    bool anyDigitalPressed = (buttons & DIGITAL_BUTTONS_MASK) != 0;
+
+    switch (metaState) {
+      case META_STATE_IDLE:
+        // STARTボタンが押された時、他のデジタルキーが同時に押されていれば通常START入力、そうでなければメタ待機へ
+        if (startPressed) {
+          if (anyDigitalPressed) {
+            metaState = META_STATE_NORMAL_START;
+          } else {
+            metaState = META_STATE_START_PRESSED;
+          }
+        }
+        break;
+
+      case META_STATE_NORMAL_START:
+        // 通常START入力状態で、ボタンが離されたらIDLEへ戻る
+        if (!startPressed) {
+          metaState = META_STATE_IDLE;
+        }
+        break;
+
+      case META_STATE_START_PRESSED:
+        // START単体の押下中に、他のキーが押されずにボタンが離されたら、通常STARTとして100ms単発クリックを発行
+        if (!startPressed) {
+          menuOnUntil = millis() + 100;
+          metaState = META_STATE_IDLE;
+        } else if (anyDigitalPressed) {
+          // 他のキーが押されたらメタモードをアクティブ（長押し操作）にします
+          metaState = META_STATE_ACTIVE;
+        }
+        break;
+
+      case META_STATE_ACTIVE:
+        // すべてのキーが離されたらIDLEへ戻ります
+        if (!startPressed && !anyDigitalPressed) {
+          metaState = META_STATE_IDLE;
+        }
+        break;
+    }
+  } else {
+    // それ以外のデバイスではメタ操作を行わない
+    metaState = META_STATE_IDLE;
+  }
+
+  // コントローラーのプロトコルに応じたボタン・アナログ値の処理
+  ControllerState state = {};
+  state.is_setting   = is_setting;
+  state.now          = now;
+  state.psxStickMode = psxStickMode;
+  switch (psxStickMode) {
+    // ==========================================
+    // SPCH-1110 FLIGHTSTICK モード（アナログスティック2本仕様）
+    // ==========================================
+    case PSPROTO_FLIGHTSTICK:  process_flightstick(&state);        break;
+
+    // ==========================================
+    // neGcon モード（ハンドルねじり・I/IIアナログボタン仕様）
+    // ==========================================
+    case PSPROTO_NEGCON:       process_negcon(&state);             break;
+
+    // ==========================================
+    // Jogcon モード（反力モーター・高分解能ダイヤルホイール・I/IIボタン感圧仕様）
+    // ==========================================
+    case PSPROTO_JOGCON:       process_jogcon(&state);             break;
+
+    case PSPROTO_DUALSHOCK2:
+    case PSPROTO_DUALSHOCK:    process_dualshock(&state);          break;
+
+    default:                   process_default_controller(&state); break;
+  }
+
+  // XInputデータ送信
+  send_xbox_report();
 }
 
