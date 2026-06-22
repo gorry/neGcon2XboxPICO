@@ -115,6 +115,10 @@ const unsigned int PIN_CONNECT = 25;  // BLUE
 const unsigned int PIN_ERRORLED = 17;  // RED
 const unsigned int PIN_GOODLED = 16;  // GREEN
 
+volatile unsigned long last_msc_access_time = 0;
+volatile uint8_t msc_access_type = 0; // 0: なし, 1: 読み込み(青), 2: 書き込み(赤)
+volatile bool msc_active_connected = false; // ホストとの通信が開始されたか
+
 bool haveController = false;
 const byte ANALOG_DEAD_ZONE = 50U;
 
@@ -180,7 +184,7 @@ static unsigned long menuOnUntil = 0;
 
 // EEPROMのClear関数
 void eepromFormat() {
-  Serial.println(F("EEP Write!"));
+  Serial.printf("[%lu] EEP Write!\n", millis());
   for (int i = 0; i < EEPROMSIZE; i++) {
     EEPROM.write(i, 0);
   }
@@ -204,7 +208,7 @@ byte restoreNegLtCurve() {
   tmp = EEPROM.read(EEPADR_NEG_ANALOG_LT_CURVE);
   if (tmp > 3) {
     tmp = NEG_ANALOG_CURVE_LINEAR;
-    Serial.println(F("EEP Write!"));
+    Serial.printf("[%lu] EEP Write!\n", millis());
     EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, tmp);
     EEPROM.commit();
   }
@@ -217,7 +221,7 @@ byte restoreNegRtCurve() {
   tmp = EEPROM.read(EEPADR_NEG_ANALOG_RT_CURVE);
   if (tmp > 3) {
     tmp = NEG_ANALOG_CURVE_LINEAR;
-    Serial.println(F("EEP Write!"));
+    Serial.printf("[%lu] EEP Write!\n", millis());
     EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, tmp);
     EEPROM.commit();
   }
@@ -259,7 +263,7 @@ byte restoreNegDegMax() {
 
   if (tmp < 0x80) {
     tmp = 255 / ((NEG_CALIB - 1) / 2 + 1);
-    Serial.println(F("EEP Write!"));
+    Serial.printf("[%lu] EEP Write!\n", millis());
     EEPROM.write(EEPADR_NEG_NEGMAX, tmp);
     EEPROM.commit();
   }
@@ -277,7 +281,7 @@ short restorejogMax() {
     tmp = 100;
     EEPROM.write(EEPADR_JOG_MAX_U, 0);
     EEPROM.write(EEPADR_JOG_MAX_L, 100);
-    Serial.println(F("EEP Write!"));
+    Serial.printf("[%lu] EEP Write!\n", millis());
     EEPROM.write(EEPADR_NEG_NEGMAX, tmp);
     EEPROM.commit();
   }
@@ -292,7 +296,7 @@ byte restoreAnaDegMax() {
 
   if (tmp < 0x80) {
     tmp = 255;
-    Serial.println(F("EEP Write!"));
+    Serial.printf("[%lu] EEP Write!\n", millis());
     EEPROM.write(EEPADR_ANALOG_STICKMAX, tmp);
     EEPROM.commit();
   }
@@ -315,7 +319,7 @@ byte restoreNegStickMode() {
 
     default:
       tmp = MODE_STD;
-      Serial.println(F("EEP Write!"));
+      Serial.printf("[%lu] EEP Write!\n", millis());
       EEPROM.write(EEPADR_NEGMODE, tmp);
       EEPROM.commit();
       break;
@@ -332,7 +336,7 @@ byte restoreNegReduceHandlePlay() {
   // ゲタ（+1）を考慮し、未設定（0）または範囲外（33より大きい）なら初期値16（ゲタありで17）にする
   if (tmp == 0 || tmp > 33) {
     tmp = 17; // 16 + 1 (ゲタ)
-    Serial.println(F("EEP Write!"));
+    Serial.printf("[%lu] EEP Write!\n", millis());
     EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, tmp);
     EEPROM.commit();
   }
@@ -447,8 +451,38 @@ void setup1() {  // core 0
 }
 
 void loop1() {  // core 0
-  if (usb_mode_msc || flash_busy) {
+  if (flash_busy) {
     delay(100);
+    return;
+  }
+
+  if (usb_mode_msc) {
+    // アクセスランプ処理（最後の読み書きから100ms未満は優先表示）
+    if (msc_access_type != 0 && (millis() - last_msc_access_time < 100)) {
+      if (msc_access_type == 1) {
+        pixels.setPixelColor(0, pixels.Color(0, 0, 255)); // 読み込み：青
+      } else {
+        pixels.setPixelColor(0, pixels.Color(255, 0, 0)); // 書き込み：赤
+      }
+      pixels.show();
+      delay(10);
+      return;
+    }
+
+    msc_access_type = 0; // 100ms以上アクセスが途切れたら状態をクリア
+    unsigned long period = msc_active_connected ? 2000 : 250;
+    unsigned long half_period = period / 2;
+    unsigned long t = millis() % period;
+    int raw_brightness;
+    if (t < half_period) {
+      raw_brightness = (t * 127) / half_period;
+    } else {
+      raw_brightness = ((period - t) * 127) / half_period;
+    }
+    byte brightness = raw_brightness; // 0〜127の範囲でなだらかに明滅
+    pixels.setPixelColor(0, pixels.Color(0, brightness, brightness));
+    pixels.show();
+    delay(20);
     return;
   }
   static byte heartbeat_num = 0;
@@ -767,6 +801,8 @@ void setup() {
   pinMode(NEO_PWR, OUTPUT);
   digitalWrite(NEO_PWR, HIGH);
   pixels.begin();
+  pixels.setPixelColor(0, pixels.Color(255, 0, 255)); // 紫：ブート初期化中
+  pixels.show();
 
   Serial.begin(115200);
   delay(500); // シリアルが安定するのを少し待つ
@@ -780,6 +816,7 @@ void setup() {
   Serial.printf("[%lu] boot_magic = 0x%08X\n", millis(), boot_magic);
   if (boot_magic == 0xAB0057C0) {
     usb_mode_msc = true;
+    msc_active_connected = false;
     stickMode = MODE_USB_MSC;
     Serial.printf("[%lu] Mode: USB MSC (Mass Storage Class)\n", millis());
   } else {
@@ -800,10 +837,10 @@ void setup() {
   attempts++;
   RealEEPROM.write(EEPADR_BOOT_ATTEMPT_COUNT, attempts);
   RealEEPROM.commit();
-  Serial.printf("Setup attempt count: %u\n", attempts);
+  Serial.printf("[%lu] Setup attempt count: %u\n", millis(), attempts);
 
   if (attempts >= 5) {
-    Serial.println(F("Too many setup failures! Formatting Flash FS..."));
+    Serial.printf("[%lu] Too many setup failures! Formatting Flash FS...\n", millis());
     for (int i = 0; i < 10; i++) {
       pixels.setPixelColor(0, pixels.Color(255, 0, 0)); pixels.show(); delay(100);
       pixels.setPixelColor(0, pixels.Color(0, 0, 0)); pixels.show(); delay(100);
@@ -811,7 +848,7 @@ void setup() {
     FatFS.format();
     RealEEPROM.write(EEPADR_BOOT_ATTEMPT_COUNT, 0);
     RealEEPROM.commit();
-    Serial.println(F("Format done. Reconnect..."));
+    Serial.printf("[%lu] Format done. Reconnect...\n", millis());
     xboxcontroller_reconnect(false);
   }
 
@@ -839,7 +876,7 @@ void setup() {
       }
     }
   } else {
-    Serial.println(F("FS size is too small, skipping FatFS.begin()."));
+    Serial.printf("[%lu] FS size is too small, skipping FatFS.begin().\n", millis());
   }
 
   // 設定ファイルのロード (通常コントローラーモード時のみロードし、MSCモード時はスキップしてフリーズを防ぐ)
@@ -869,6 +906,7 @@ void setup() {
 void loop() {
   if (usb_mode_msc) {
     tud_task();
+    tud_msc_sync_task();
     if (BOOTSEL) {
       xboxcontroller_reconnect(false); // 通常コントローラーモードへ復帰
     }
@@ -880,6 +918,7 @@ void loop() {
 
   // TinyUSBデバイススタックのタスク処理を最優先で巡回させる
   tud_task();
+  tud_msc_sync_task();
 
   static unsigned long lastPsxReadTime = 0;
   static unsigned long lastSearchTime = 0; // psx.begin() の間隔制限用
@@ -919,8 +958,7 @@ void loop() {
       if (sBootSel == 0) changeNegStickMode = false;
       if (sBootSel == 9) {
         changeNegStickMode = true;
-        Serial.print(F("Current Stick mode is: "));
-        Serial.println(stickMode);
+        Serial.printf("[%lu] Current Stick mode is: %d\n", millis(), stickMode);
       }
       if (sBootSel == 374) {
         if ((OldpsxStickMode == PSPROTO_NEGCON) || (OldpsxStickMode == PSPROTO_JOGCON) || (OldpsxStickMode == PSPROTO_FLIGHTSTICK)) {
@@ -942,15 +980,14 @@ void loop() {
         else if (stickMode == MODE_SWAPAB_SWAPLTRT) stickMode = MODE_STD;
         else stickMode = MODE_STD;
 
-        Serial.println(F("EEP Write!"));
+        Serial.printf("[%lu] EEP Write!\n", millis());
         EEPROM.write(EEPADR_NEGMODE, stickMode);
         EEPROM.commit();
       }
 
       if (stickMode == MODE_SETTING_NEG) stickMode = beforeStickMode;
 
-      Serial.print(F("Change Stick mode is: "));
-      Serial.println(stickMode);
+      Serial.printf("[%lu] Change Stick mode is: %d\n", millis(), stickMode);
     }
 
     changeNegStickMode = false;
@@ -962,43 +999,40 @@ void loop() {
     // コントローラー未検出時は1秒間隔で探索（USB列挙処理への干渉を防ぐ）
     if (now - lastSearchTime >= 1000) {
       lastSearchTime = now;
-      Serial.printf("Searching for controller... (now: %lu)\n", now);
+      Serial.printf("[%lu] Searching for controller...\n", now);
       if (psx.begin()) {
-        Serial.println(F("Controller found!"));
+        Serial.printf("[%lu] Controller found!\n", millis());
         delay(300);
         if (!psx.enterConfigMode()) {
-          Serial.println(F("Cannot enter config mode"));
+          Serial.printf("[%lu] Cannot enter config mode\n", millis());
           psxContType = psx.getControllerType();
-          Serial.print(F("Controller Type is: "));
-          Serial.println(controllerTypeStrings[psxContType < PSCTRL_MAX ? static_cast<byte>(psxContType) : PSCTRL_MAX]);
+          Serial.printf("[%lu] Controller Type is: %s\n", millis(), controllerTypeStrings[psxContType < PSCTRL_MAX ? static_cast<byte>(psxContType) : PSCTRL_MAX]);
           psx.read();
         } else {
           psxContType = psx.getControllerType();
-          Serial.print(F("Controller Type is: "));
-          Serial.println(controllerTypeStrings[psxContType < PSCTRL_MAX ? static_cast<byte>(psxContType) : PSCTRL_MAX]);
+          Serial.printf("[%lu] Controller Type is: %s\n", millis(), controllerTypeStrings[psxContType < PSCTRL_MAX ? static_cast<byte>(psxContType) : PSCTRL_MAX]);
 
           if (!psx.enableAnalogSticks()) {
-            Serial.println(F("Cannot enable analog sticks"));
+            Serial.printf("[%lu] Cannot enable analog sticks\n", millis());
           }
           if (!psx.enableAnalogButtons()) {
-            Serial.println(F("Cannot enable analog buttons"));
+            Serial.printf("[%lu] Cannot enable analog buttons\n", millis());
           }
           if (!psx.exitConfigMode()) {
-            Serial.println(F("Cannot exit config mode"));
+            Serial.printf("[%lu] Cannot exit config mode\n", millis());
           }
         }
 
         psx.read();
         psxStickMode = psx.getProtocol();
-        Serial.print(F("Controller Protocol is: "));
-        Serial.println(controllerProtoStrings[psxStickMode < PSPROTO_MAX ? static_cast<byte>(psxStickMode) : PSPROTO_MAX]);
+        Serial.printf("[%lu] Controller Protocol is: %s\n", millis(), controllerProtoStrings[psxStickMode < PSPROTO_MAX ? static_cast<byte>(psxStickMode) : PSPROTO_MAX]);
         haveController = true;
       }
     }
   } else {
     if (!psx.read()) {
       digitalWrite(PIN_GOODLED, HIGH);
-      Serial.println(F("Controller lost :x"));
+      Serial.printf("[%lu] Controller lost :x\n", millis());
       haveController = false;
       psxContType = PSCTRL_UNKNOWN;
       psxStickMode = PSPROTO_UNKNOWN;
@@ -1020,17 +1054,16 @@ void loop() {
         if (psxStickMode == PSPROTO_JOGCON) {
           delay(300);
           if (psx.enterConfigMode()) {
-            Serial.println(F("Set Jogcon Rumble"));
+            Serial.printf("[%lu] Set Jogcon Rumble\n", millis());
             if (!psx.enableJogconRumble()) {
-              Serial.println(F("Cannot enable Jogcon Rumble"));
+              Serial.printf("[%lu] Cannot enable Jogcon Rumble\n", millis());
             }
             if (!psx.exitConfigMode()) {
-              Serial.println(F("Cannot exit config mode"));
+              Serial.printf("[%lu] Cannot exit config mode\n", millis());
             }
           }
         }
-        Serial.print(F("Controller Protocol is: "));
-        Serial.println(controllerProtoStrings[psxStickMode < PSPROTO_MAX ? static_cast<byte>(psxStickMode) : PSPROTO_MAX]);
+        Serial.printf("[%lu] Controller Protocol is: %s\n", millis(), controllerProtoStrings[psxStickMode < PSPROTO_MAX ? static_cast<byte>(psxStickMode) : PSPROTO_MAX]);
       }
       OldpsxStickMode = psxStickMode;
 
@@ -1140,8 +1173,7 @@ void loop() {
               xboxcontroller_reconnect(true); // MSCモードへ移行（リセット）
             }
             if (psx.getButtonWord() & PSB_CIRCLE) {
-              Serial.print(F("Analog lxMax before: "));
-              Serial.println(analogLxMax);
+              Serial.printf("[%lu] Analog lxMax before: %d\n", millis(), analogLxMax);
               l_x_tmp = absoluteXY(lx_org);
 
               xy_tmp = absoluteXY(ly_org);
@@ -1157,12 +1189,11 @@ void loop() {
               if (l_x_tmp < (0x80 + 10)) l_x_tmp = 255;
 
               analogLxMax = (byte)l_x_tmp;
-              Serial.println(F("EEP Write!"));
+              Serial.printf("[%lu] EEP Write!\n", millis());
               EEPROM.write(EEPADR_ANALOG_STICKMAX, analogLxMax);
               EEPROM.commit();
 
-              Serial.print(F("Analog lxMax after: "));
-              Serial.println(analogLxMax);
+              Serial.printf("[%lu] Analog lxMax after: %d\n", millis(), analogLxMax);
               stickMode = beforeStickMode;
             }
           }
@@ -1396,8 +1427,7 @@ void loop() {
                 negRtCurve = (negRtCurve + 1) % 4;
                 EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, negRtCurve);
                 EEPROM.commit();
-                Serial.print(F("NEG_ANALOG_RT_CURVE: "));
-                Serial.println(negRtCurve);
+                Serial.printf("[%lu] NEG_ANALOG_RT_CURVE: %d\n", millis(), negRtCurve);
                 ledFlashCount = negRtCurve + 1;
               }
 
@@ -1406,8 +1436,7 @@ void loop() {
                 negLtCurve = (negLtCurve + 1) % 4;
                 EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, negLtCurve);
                 EEPROM.commit();
-                Serial.print(F("NEG_ANALOG_LT_CURVE: "));
-                Serial.println(negLtCurve);
+                Serial.printf("[%lu] NEG_ANALOG_LT_CURVE: %d\n", millis(), negLtCurve);
                 ledFlashCount = negLtCurve + 1;
               }
 
@@ -1417,8 +1446,7 @@ void loop() {
                   negReduceHandlePlay++;
                   EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1); // ゲタ（+1）をはかせて保存
                   EEPROM.commit();
-                  Serial.print(F("NEG_REDUCE_HANDLE_PLAY: "));
-                  Serial.println(negReduceHandlePlay);
+                  Serial.printf("[%lu] NEG_REDUCE_HANDLE_PLAY: %d\n", millis(), negReduceHandlePlay);
                 }
               }
               if ((buttons & PSB_PAD_DOWN) && !(lastButtons & PSB_PAD_DOWN)) {
@@ -1426,16 +1454,14 @@ void loop() {
                   negReduceHandlePlay--;
                   EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1); // ゲタ（+1）をはかせて保存
                   EEPROM.commit();
-                  Serial.print(F("NEG_REDUCE_HANDLE_PLAY: "));
-                  Serial.println(negReduceHandlePlay);
+                  Serial.printf("[%lu] NEG_REDUCE_HANDLE_PLAY: %d\n", millis(), negReduceHandlePlay);
                 }
               }
               if ((buttons & PSB_START) && !(lastButtons & PSB_START)) {
                 xboxcontroller_reconnect(true); // MSCモードへ移行（リセット）
               }
               if ((buttons & PSB_CIRCLE) && !(lastButtons & PSB_CIRCLE)) {
-                Serial.print(F("neG lxMax before: "));
-                Serial.println(lxMax);
+                Serial.printf("[%lu] neG lxMax before: %d\n", millis(), lxMax);
 
                 //センターからの相対値に変更
                 l_x_tmp = absoluteXY(lx_org);
@@ -1444,12 +1470,11 @@ void loop() {
                 if (l_x_tmp < (0x80 + 10)) l_x_tmp = 0xff / ((NEG_CALIB - 1) / 2 + 1);
 
                 lxMax = (byte)l_x_tmp;
-                Serial.println(F("EEP Write!"));
+                Serial.printf("[%lu] EEP Write!\n", millis());
                 EEPROM.write(EEPADR_NEG_NEGMAX, lxMax);
                 EEPROM.commit();
 
-                Serial.print(F("neG lxMax after: "));
-                Serial.println(lxMax);
+                Serial.printf("[%lu] neG lxMax after: %d\n", millis(), lxMax);
                 stickMode = beforeStickMode;
               }
 
@@ -1609,20 +1634,18 @@ void loop() {
                   xboxcontroller_reconnect(true); // MSCモードへ移行（リセット）
                 }
                 if (psx.getButtonWord() & PSB_CIRCLE) {
-                  Serial.print(F("Jogcon jogconDialMax before: "));
-                  Serial.println(jogconDialMax);
+                  Serial.printf("[%lu] Jogcon jogconDialMax before: %d\n", millis(), jogconDialMax);
                   //センターからの相対値に変更
                   jogconDialMax = jogcon_abs_val(jogx);
                   //センター値近辺の場合は初期値に設定
                   if (jogconDialMax <= 8) jogconDialMax = 100;
 
-                  Serial.println(F("EEP Write!"));
+                  Serial.printf("[%lu] EEP Write!\n", millis());
                   EEPROM.write(EEPADR_JOG_MAX_U, (byte)(jogconDialMax >> 8));
                   EEPROM.write(EEPADR_JOG_MAX_L, (byte)(jogconDialMax & 0x00ff));
                   EEPROM.commit();
 
-                  Serial.print(F("Jogcon jogconDialMax after: "));
-                  Serial.println(jogconDialMax);
+                  Serial.printf("[%lu] Jogcon jogconDialMax after: %d\n", millis(), jogconDialMax);
                   stickMode = beforeStickMode;
                 }
               }

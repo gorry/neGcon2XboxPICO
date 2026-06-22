@@ -1,5 +1,8 @@
 #pragma once
 
+// MSCアクセス時の詳細シリアルログ（タイムスタンプ＋内容）を出力する場合はコメントアウトを解除します
+#define USE_LOG_MSC
+
 #include <stdint.h>
 #include "Arduino.h"
 #include <stdarg.h>
@@ -97,3 +100,4 @@ bool xboxcontroller_send_report(void);
 extern bool usb_mode_msc;
 extern bool config_file_writing;
 void xboxcontroller_reconnect(bool as_msc);
+void tud_msc_sync_task(void);

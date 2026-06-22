@@ -26,6 +26,13 @@ static uint8_t flash_sector_buf[FLASH_SECTOR_SIZE] __attribute__((aligned(4)));
 bool usb_mode_msc = false;
 bool config_file_writing = false;
 
+extern volatile unsigned long last_msc_access_time;
+extern volatile uint8_t msc_access_type;
+extern volatile bool msc_active_connected;
+
+static uint32_t last_msc_write_time = 0;
+static bool msc_write_dirty = false;
+
 // MSC 用の Device Descriptor
 tusb_desc_device_t const mscDeviceDescriptor = {
   .bLength = sizeof(tusb_desc_device_t),
@@ -412,18 +419,49 @@ bool tud_msc_is_write_protected_cb(uint8_t lun) {
 int32_t tud_msc_read10_cb(uint8_t lun, uint32_t lba, uint32_t offset, void* buffer, uint32_t bufsize) {
   (void) lun;
 
+  // 読み込みアクセスを通知 (青)
+  last_msc_access_time = millis();
+  msc_active_connected = true;
+  if (offset == 0) {
+    if (msc_access_type == 0) {
+      msc_access_type = 1;
+    }
+
+#ifdef USE_LOG_MSC
+    uint8_t* b = (uint8_t*)buffer;
+    Serial.printf("[%lu] [MSC READ] lba:%u, bufsize:%u, offset:%u, buf_ptr:%p, before_data:0x%02X%02X%02X%02X\n", 
+                  last_msc_access_time, lba, bufsize, offset, buffer, b[0], b[1], b[2], b[3]);
+#endif
+
+
+  }
+
   uint8_t temp_buf[MSC_BLOCK_SIZE];
   int res = fatfs::disk_read(0, temp_buf, lba, 1);
   if (res == fatfs::RES_OK) {
     memcpy(buffer, temp_buf + offset, bufsize);
     return bufsize;
   }
-  Serial.printf("[MSC READ FAILED] res:%d\n", res);
+  Serial.printf("[%lu] [MSC READ FAILED] res:%d\n", millis(), res);
   return -1;
 }
 
 int32_t tud_msc_write10_cb(uint8_t lun, uint32_t lba, uint32_t offset, uint8_t* buffer, uint32_t bufsize) {
   (void) lun;
+
+  // キャッシュへの書き込みタイミングでアクセスランプ(赤)を点灯
+  // これは読み込みより優先するので、消灯判定は行わない
+  last_msc_access_time = millis();
+  msc_active_connected = true;
+  if (offset == 0) {
+    msc_access_type = 2;
+
+#ifdef USE_LOG_MSC
+    Serial.printf("[%lu] [MSC WRITE] lba:%u, bufsize:%u, offset:%u, buf_ptr:%p, data:0x%02X%02X%02X%02X\n", 
+                  last_msc_access_time, lba, bufsize, offset, buffer, buffer[0], buffer[1], buffer[2], buffer[3]);
+#endif
+
+  }
 
   uint8_t temp_buf[MSC_BLOCK_SIZE];
   if (fatfs::disk_read(0, temp_buf, lba, 1) != fatfs::RES_OK) {
@@ -433,14 +471,30 @@ int32_t tud_msc_write10_cb(uint8_t lun, uint32_t lba, uint32_t offset, uint8_t* 
 
   int res = fatfs::disk_write(0, temp_buf, lba, 1);
   if (res == fatfs::RES_OK) {
-    fatfs::disk_ioctl(0, CTRL_SYNC, nullptr); // 即座に物理フラッシュへ保存
+    last_msc_write_time = millis();
+    msc_write_dirty = true;
     return bufsize;
   }
-  Serial.printf("[MSC WRITE FAILED] res:%d\n", res);
+  Serial.printf("[%lu] [MSC WRITE FAILED] res:%d\n", millis(), res);
   return -1;
 }
 
 } // extern "C"
+
+void tud_msc_sync_task(void) {
+  if (msc_write_dirty && (millis() - last_msc_write_time >= 500)) {
+    // 物理フラッシュへの書き出しタイミングでアクセスランプ(赤)を点灯
+    // これは読み込みより優先するので、消灯判定は行わない
+    last_msc_access_time = millis();
+    msc_access_type = 2; // 書き込み：赤
+
+    fatfs::disk_ioctl(0, CTRL_SYNC, nullptr);
+    msc_write_dirty = false;
+#ifdef USE_LOG_MSC
+    Serial.printf("[%lu] [MSC SYNC] Cache flushed to physical flash.\n", millis());
+#endif
+  }
+}
 
 void xboxcontroller_reconnect(bool as_msc) {
   // BOOTSELボタンが離されるまで待つ
@@ -450,6 +504,12 @@ void xboxcontroller_reconnect(bool as_msc) {
     delay(1);
   }
   delay(100); // 物理的なチャタリングと指が完全に離れるのを待つマージン
+
+  // 再起動前に未フラッシュのデータを強制同期
+  if (msc_write_dirty) {
+    fatfs::disk_ioctl(0, CTRL_SYNC, nullptr);
+    msc_write_dirty = false;
+  }
 
   // 1. リセット開始を伝えるデバッグLED：赤色
   pixels.setPixelColor(0, pixels.Color(255, 0, 0));
