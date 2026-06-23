@@ -102,20 +102,20 @@ void SubCoreApp::update() {
   // スティックモードに応じた LED 色制御
   switch (stickMode) {
     case MODE_STD:
-      // 青色ベース（標準モード、無入力時は青）
-      _pixels.setPixelColor(0, _pixels.Color(_ledRx / 4, _ledLx / 4, 0x80 - _ledB1 - _ledB2 + _ledBL / 2));
+      // 青色ベース (標準モード、無入力時は青)
+      _pixels.setPixelColor(0, _pixels.Color(_ledB1 / 2 + _ledBL / 2, _ledB2 / 2 + _ledBL / 2, _ledLx));
       _pixels.show();
       break;
 
     case MODE_SWAPAB:
-      // 緑色ベース（A/Bスワップ、無入力時は緑）
-      _pixels.setPixelColor(0, _pixels.Color(_ledRx / 4, 0x80 - _ledB1 + _ledBL / 2, _ledLx / 4));
+      // オレンジ・赤ベース (A/Bスワップ、無入力時は紫)
+      _pixels.setPixelColor(0, _pixels.Color(0x80 - _ledB1 + _ledB2, 0, _ledLx));
       _pixels.show();
       break;
 
     case MODE_SWAPLTRT:
-      // 赤色ベース（LT/RTスワップ、無入力時は赤）
-      _pixels.setPixelColor(0, _pixels.Color(0x80 - _ledB2 + _ledBL / 2, _ledLx / 4, _ledLy / 4));
+      // 緑色ベース (LT/RTスワップ、無入力時は緑)
+      _pixels.setPixelColor(0, _pixels.Color(_ledB2 / 2 + _ledBL / 2, _ledLx, _ledB1 / 2 + _ledBL / 2));
       _pixels.show();
       break;
 
