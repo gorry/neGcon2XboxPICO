@@ -9,6 +9,8 @@
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "hardware/watchdog.h"
+#include "pico/unique_id.h"
+#include <stdio.h>
 #include <Adafruit_NeoPixel.h>
 #include <FatFS.h>
 
@@ -207,6 +209,8 @@ char const *string_desc_arr_xinput[] = {
   "1.0"                       // 3: Serials
 };
 
+static char xinput_serial_str[32] = "1.0";
+
 static uint16_t _desc_str[32];
 
 /// <summary>
@@ -377,6 +381,13 @@ void xboxcontroller_init(void) {
   memset(&XboxButtonData, 0, sizeof(ReportDataXinput_t));
   XboxButtonData.message_type = 0x00;
   XboxButtonData.packet_size = 0x14;
+
+  // PicoのユニークIDを取得してシリアル番号を設定
+  char unique_id[17];
+  pico_get_unique_board_id_string(unique_id, sizeof(unique_id));
+  snprintf(xinput_serial_str, sizeof(xinput_serial_str), "neGcon-%s", unique_id);
+  string_desc_arr_xinput[3] = xinput_serial_str;
+
   tusb_init();
 }
 
