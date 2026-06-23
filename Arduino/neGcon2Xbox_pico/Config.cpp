@@ -3,6 +3,7 @@
 #include <FatFS.h>
 #include "XboxControllerPico.h"
 #include <hardware/sync.h>
+#include "neGcon2Xbox_pico.h"
 
 // config の実体定義
 ConfigParams config = {
@@ -15,11 +16,7 @@ ConfigParams config = {
   .analogLxMax = DEFAULT_ANALOG_LX_MAX
 };
 
-// 他のソースファイルで定義されているグローバル変数への外部参照
-extern bool fs_ready;
-extern volatile bool flash_busy;
-extern byte beforeStickMode;
-extern bool config_file_writing;
+volatile bool flash_busy = false;
 
 /// <summary>
 /// 設定パラメータを使って CONFIG.INI 形式のデータを指定した出力先に書き出します。
@@ -446,4 +443,83 @@ void migrateOrInitConfig() {
       file.close();
     }
   }
+}
+
+/// <summary>
+/// アナログスティックの最大キャリブレーション値を保存します。
+/// </summary>
+/// <param name="maxVal">設定する最大キャリブレーション値 (128-255)</param>
+/// <param name="currentStickMode">現在のスティックモード</param>
+void saveAnalogLxMax(byte maxVal, byte currentStickMode) {
+  config.analogLxMax = maxVal;
+  Serial.printf("[%lu] EEP Write (AnalogLxMax)!\n", millis());
+  ::EEPROM.write(EEPADR_ANALOG_STICKMAX, config.analogLxMax);
+  ::EEPROM.commit();
+  saveConfig(currentStickMode);
+}
+
+/// <summary>
+/// Jogconダイヤルの最大回転位置キャリブレーション値を保存します。
+/// </summary>
+/// <param name="maxVal">設定する最大キャリブレーション値 (8-500)</param>
+/// <param name="currentStickMode">現在のスティックモード</param>
+void saveJogconDialMax(short maxVal, byte currentStickMode) {
+  config.jogconDialMax = maxVal;
+  Serial.printf("[%lu] EEP Write (JogconDialMax)!\n", millis());
+  ::EEPROM.write(EEPADR_JOG_MAX_U, (byte)(config.jogconDialMax >> 8));
+  ::EEPROM.write(EEPADR_JOG_MAX_L, (byte)(config.jogconDialMax & 0x00ff));
+  ::EEPROM.commit();
+  saveConfig(currentStickMode);
+}
+
+/// <summary>
+/// neGconのアナログRT感度カーブを保存します。
+/// </summary>
+/// <param name="curveVal">設定するカーブ種類 (0-3)</param>
+/// <param name="currentStickMode">現在のスティックモード</param>
+void saveNegRtCurve(byte curveVal, byte currentStickMode) {
+  config.negRtCurve = curveVal;
+  Serial.printf("[%lu] EEP Write (NegRtCurve)!\n", millis());
+  ::EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, config.negRtCurve);
+  ::EEPROM.commit();
+  saveConfig(currentStickMode);
+}
+
+/// <summary>
+/// neGconのアナログLT感度カーブを保存します。
+/// </summary>
+/// <param name="curveVal">設定するカーブ種類 (0-3)</param>
+/// <param name="currentStickMode">現在のスティックモード</param>
+void saveNegLtCurve(byte curveVal, byte currentStickMode) {
+  config.negLtCurve = curveVal;
+  Serial.printf("[%lu] EEP Write (NegLtCurve)!\n", millis());
+  ::EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, config.negLtCurve);
+  ::EEPROM.commit();
+  saveConfig(currentStickMode);
+}
+
+/// <summary>
+/// neGconの遊び削減値を保存します。
+/// </summary>
+/// <param name="playVal">設定する遊び削減値 (0-32)</param>
+/// <param name="currentStickMode">現在のスティックモード</param>
+void saveNegReduceHandlePlay(byte playVal, byte currentStickMode) {
+  config.negReduceHandlePlay = playVal;
+  Serial.printf("[%lu] EEP Write (NegReduceHandlePlay)!\n", millis());
+  ::EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, config.negReduceHandlePlay + 1);
+  ::EEPROM.commit();
+  saveConfig(currentStickMode);
+}
+
+/// <summary>
+/// neGconの最大ねじり角キャリブレーション値を保存します。
+/// </summary>
+/// <param name="maxVal">設定する最大ねじり角キャリブレーション値 (1-255)</param>
+/// <param name="currentStickMode">現在のスティックモード</param>
+void saveNegTwistMax(byte maxVal, byte currentStickMode) {
+  config.lxMax = maxVal;
+  Serial.printf("[%lu] EEP Write (NegTwistMax)!\n", millis());
+  ::EEPROM.write(EEPADR_NEG_NEGMAX, config.lxMax);
+  ::EEPROM.commit();
+  saveConfig(currentStickMode);
 }

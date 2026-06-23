@@ -133,4 +133,46 @@ byte restoreNegStickMode();
 /// <returns>復元された遊び削減値 (0-32)</returns>
 byte restoreNegReduceHandlePlay();
 
+/// <summary>
+/// アナログスティックの最大キャリブレーション値を保存します。
+/// </summary>
+/// <param name="maxVal">設定する最大キャリブレーション値 (128-255)</param>
+/// <param name="currentStickMode">現在のスティックモード</param>
+void saveAnalogLxMax(byte maxVal, byte currentStickMode);
+
+/// <summary>
+/// Jogconダイヤルの最大回転位置キャリブレーション値を保存します。
+/// </summary>
+/// <param name="maxVal">設定する最大キャリブレーション値 (8-500)</param>
+/// <param name="currentStickMode">現在のスティックモード</param>
+void saveJogconDialMax(short maxVal, byte currentStickMode);
+
+/// <summary>
+/// neGconのアナログRT感度カーブを保存します。
+/// </summary>
+/// <param name="curveVal">設定するカーブ種類 (0-3)</param>
+/// <param name="currentStickMode">現在のスティックモード</param>
+void saveNegRtCurve(byte curveVal, byte currentStickMode);
+
+/// <summary>
+/// neGconのアナログLT感度カーブを保存します。
+/// </summary>
+/// <param name="curveVal">設定するカーブ種類 (0-3)</param>
+/// <param name="currentStickMode">現在のスティックモード</param>
+void saveNegLtCurve(byte curveVal, byte currentStickMode);
+
+/// <summary>
+/// neGconの遊び削減値を保存します。
+/// </summary>
+/// <param name="playVal">設定する遊び削減値 (0-32)</param>
+/// <param name="currentStickMode">現在のスティックモード</param>
+void saveNegReduceHandlePlay(byte playVal, byte currentStickMode);
+
+/// <summary>
+/// neGconの最大ねじり角キャリブレーション値を保存します。
+/// </summary>
+/// <param name="maxVal">設定する最大ねじり角キャリブレーション値 (1-255)</param>
+/// <param name="currentStickMode">現在のスティックモード</param>
+void saveNegTwistMax(byte maxVal, byte currentStickMode);
+
 #endif // CONFIG_H

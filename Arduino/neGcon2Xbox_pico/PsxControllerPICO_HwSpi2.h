@@ -1,3 +1,6 @@
+#ifndef PSX_CONTROLLER_PICO_HW_SPI2_H
+#define PSX_CONTROLLER_PICO_HW_SPI2_H
+
 #include "PsxNewLib.h"
 
 /** \brief Attention Delay
@@ -81,3 +84,5 @@ public:
 		motor2Level = 0x00;
 	}
 };
+
+#endif // PSX_CONTROLLER_PICO_HW_SPI2_H

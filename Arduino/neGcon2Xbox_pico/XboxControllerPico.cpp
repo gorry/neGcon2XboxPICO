@@ -11,13 +11,13 @@
 #include "hardware/watchdog.h"
 #include "pico/unique_id.h"
 #include <stdio.h>
-#include <Adafruit_NeoPixel.h>
 #include <FatFS.h>
+#include "neGcon2Xbox_pico.h"
+#include "SubCore.h"
 
 // 外部フラッシュ領域 (__FS_START, __FS_END) を参照するための extern 宣言
 extern uint8_t _FS_start;
 extern uint8_t _FS_end;
-extern Adafruit_NeoPixel pixels;
 
 #define MSC_BLOCK_SIZE 512
 
@@ -28,9 +28,6 @@ static uint8_t flash_sector_buf[FLASH_SECTOR_SIZE] __attribute__((aligned(4)));
 bool usb_mode_msc = false;
 bool config_file_writing = false;
 
-extern volatile unsigned long last_msc_access_time;
-extern volatile uint8_t msc_access_type;
-extern volatile bool msc_active_connected;
 
 static uint32_t last_msc_write_time = 0;
 static bool msc_write_dirty = false;
@@ -484,6 +481,34 @@ void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16
 }
 
 /// <summary>
+/// ファイルシステムの開始物理アドレスを取得します。
+/// </summary>
+/// <returns>開始物理アドレス</returns>
+uint32_t get_fs_start_address(void) {
+  uint32_t start = (uint32_t)&_FS_start;
+  if (start < 0x10000000) start += 0x10000000;
+  return start;
+}
+
+/// <summary>
+/// ファイルシステムの終了物理アドレスを取得します。
+/// </summary>
+/// <returns>終了物理アドレス</returns>
+uint32_t get_fs_end_address(void) {
+  uint32_t end = (uint32_t)&_FS_end;
+  if (end < 0x10000000) end += 0x10000000;
+  return end;
+}
+
+/// <summary>
+/// ファイルシステムのサイズ（バイト）を取得します。
+/// </summary>
+/// <returns>ファイルシステムサイズ（バイト）</returns>
+uint32_t get_fs_size(void) {
+  return get_fs_end_address() - get_fs_start_address();
+}
+
+/// <summary>
 /// メディア容量情報を返却するコールバック
 /// </summary>
 /// <param name="lun">論理ユニット番号</param>
@@ -491,11 +516,7 @@ void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16
 /// <param name="block_size">ブロックサイズ書き込み先バッファ</param>
 void tud_msc_read_capacity_cb(uint8_t lun, uint32_t* block_count, uint16_t* block_size) {
   (void) lun;
-  uint32_t start_addr = (uint32_t)&_FS_start;
-  uint32_t end_addr = (uint32_t)&_FS_end;
-  if (start_addr < 0x10000000) start_addr += 0x10000000;
-  if (end_addr < 0x10000000) end_addr += 0x10000000;
-  uint32_t flash_size = end_addr - start_addr;
+  uint32_t flash_size = get_fs_size();
   *block_size = MSC_BLOCK_SIZE;
   *block_count = flash_size / MSC_BLOCK_SIZE;
 }
@@ -568,8 +589,6 @@ int32_t tud_msc_read10_cb(uint8_t lun, uint32_t lba, uint32_t offset, void* buff
     Serial.printf("[%lu] [MSC READ] lba:%u, bufsize:%u, offset:%u, buf_ptr:%p, before_data:0x%02X%02X%02X%02X\n", 
                   last_msc_access_time, lba, bufsize, offset, buffer, b[0], b[1], b[2], b[3]);
 #endif
-
-
   }
 
   uint8_t temp_buf[MSC_BLOCK_SIZE];

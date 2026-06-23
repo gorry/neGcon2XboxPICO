@@ -101,3 +101,21 @@ extern bool usb_mode_msc;
 extern bool config_file_writing;
 void xboxcontroller_reconnect(bool as_msc);
 void tud_msc_sync_task(void);
+
+/// <summary>
+/// ファイルシステムの開始物理アドレスを取得します。
+/// </summary>
+/// <returns>開始物理アドレス</returns>
+uint32_t get_fs_start_address(void);
+
+/// <summary>
+/// ファイルシステムの終了物理アドレスを取得します。
+/// </summary>
+/// <returns>終了物理アドレス</returns>
+uint32_t get_fs_end_address(void);
+
+/// <summary>
+/// ファイルシステムのサイズ（バイト）を取得します。
+/// </summary>
+/// <returns>ファイルシステムサイズ（バイト）</returns>
+uint32_t get_fs_size(void);
