@@ -50,10 +50,6 @@ void FlightStickController::process(ControllerState *state) {
 
   // キャリブレーション設定モード中の処理
   if (state->is_setting) {
-    // STARTボタン押下でUSB MSC（マスストレージ）へ再接続移行
-    if (psx.getButtonWord() & PSB_START) {
-      xboxcontroller_reconnect(true);
-    }
     // CIRCLE（赤）ボタンで現在のスティック最大傾きを計測し、最大角としてEEPROMに保存します
     if (psx.getButtonWord() & PSB_CIRCLE) {
       Serial.printf("[%lu] Analog config.lxMax before: %d\n", millis(), config.analogLxMax);

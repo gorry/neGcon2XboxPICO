@@ -227,9 +227,6 @@ void NeGconController::process(ControllerState *state) {
         }
       }
       // STARTボタン押下でUSB MSC（マスストレージ）接続モードへリブート
-      if ((buttons & PSB_START) && !(lastButtons & PSB_START)) {
-        xboxcontroller_reconnect(true);
-      }
       // CIRCLE（赤）ボタン押下で、現在のハンドルねじり量を「最大ねじり角」としてキャリブレーション保存
       if ((buttons & PSB_CIRCLE) && !(lastButtons & PSB_CIRCLE)) {
         Serial.printf("[%lu] neG config.lxMax before: %d\n", millis(), config.lxMax);

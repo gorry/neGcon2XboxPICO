@@ -206,6 +206,11 @@ public:
   /// <param name="maxVal">設定する最大ねじり角キャリブレーション値 (1-255)</param>
   /// <param name="currentStickMode">現在のスティックモード</param>
   void saveNegTwistMax(byte maxVal, byte currentStickMode);
+
+  /// <summary>
+  /// 設定パラメータを工場出荷時のデフォルト値にリセットし、EEPROMとCONFIG.INIをクリアします。
+  /// </summary>
+  void resetToDefault();
 };
 
 // 既存コードとの互換性確保のためのマクロ定義
@@ -221,5 +226,6 @@ inline void saveNegRtCurve(byte curveVal, byte currentStickMode) { ConfigManager
 inline void saveNegLtCurve(byte curveVal, byte currentStickMode) { ConfigManager::getInstance().saveNegLtCurve(curveVal, currentStickMode); }
 inline void saveNegReduceHandlePlay(byte playVal, byte currentStickMode) { ConfigManager::getInstance().saveNegReduceHandlePlay(playVal, currentStickMode); }
 inline void saveNegTwistMax(byte maxVal, byte currentStickMode) { ConfigManager::getInstance().saveNegTwistMax(maxVal, currentStickMode); }
+inline void resetConfigToDefault() { ConfigManager::getInstance().resetToDefault(); }
 
 #endif // CONFIG_H

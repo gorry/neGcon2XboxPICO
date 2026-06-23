@@ -593,6 +593,36 @@ void process_connected_controller(bool is_setting, unsigned long now) {
     metaState = META_STATE_IDLE;
   }
 
+  // 設定モード中のSTARTボタン処理 (短押し: MSCモード、3秒長押し: 設定初期化&再起動)
+  if (is_setting) {
+    static unsigned long startPressTime = 0;
+    static bool startProcessed = false;
+
+    uint16_t buttons = psx.getButtonWord();
+    bool startPressed = (buttons & PSB_START) != 0;
+
+    if (startPressed) {
+      if (startPressTime == 0) {
+        startPressTime = now;
+        startProcessed = false;
+      } else if (!startProcessed && (now - startPressTime >= 3000)) {
+        startProcessed = true;
+        Serial.println(F("START long pressed! Resetting config to default and rebooting..."));
+        resetConfigToDefault();
+        xboxcontroller_reconnect(false); // 通常モードで再起動
+      }
+    } else {
+      if (startPressTime > 0) {
+        unsigned long pressDuration = now - startPressTime;
+        startPressTime = 0;
+        if (!startProcessed && (pressDuration >= 50)) { // チャタリング防止 (50ms)
+          Serial.println(F("START short pressed! Reconnecting in USB MSC mode..."));
+          xboxcontroller_reconnect(true); // MSCモードで再起動
+        }
+      }
+    }
+  }
+
   // コントローラーのプロトコルに応じたボタン・アナログ値の処理
   ControllerState state = {};
   state.is_setting   = is_setting;

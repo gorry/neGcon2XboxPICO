@@ -152,9 +152,6 @@ void JogConController::process(ControllerState *state) {
           psx.setJogCommand(0x00);
         }
       } else {
-        if (psx.getButtonWord() & PSB_START) {
-          xboxcontroller_reconnect(true); // MSCモードへ移行（リセット）
-        }
         if (psx.getButtonWord() & PSB_CIRCLE) {
           Serial.printf("[%lu] Jogcon config.jogconDialMax before: %d\n", millis(), config.jogconDialMax);
           // センターからの相対値に変更

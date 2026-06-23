@@ -524,3 +524,16 @@ void ConfigManager::saveNegTwistMax(byte maxVal, byte currentStickMode) {
   ::EEPROM.commit();
   save(currentStickMode);
 }
+
+/// <summary>
+/// 設定パラメータを工場出荷時のデフォルト値にリセットし、EEPROMとCONFIG.INIをクリアします。
+/// </summary>
+void ConfigManager::resetToDefault() {
+  // EEPROMのフォーマット
+  eepromFormat();
+  // FATファイルシステム全体の物理フォーマット
+  if (fs_ready) {
+    FatFS.end(); // アンマウントしてフォーマット用ガードを解除
+    FatFS.format();
+  }
+}
