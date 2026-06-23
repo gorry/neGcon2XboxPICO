@@ -218,13 +218,15 @@ static byte jogxPosResetEnable = 0;
 static PsxControllerType psxContType = PSCTRL_UNKNOWN;
 static PsxControllerProtocol OldpsxStickMode = PSPROTO_UNKNOWN;
 static byte ledLx, ledLy, ledRx, ledRy, ledB1, ledB2, ledBL;
-static byte stickMode = DEFAULT_STICK_MODE;
-static byte lxMax = DEFAULT_NEG_TWIST_MAX;
-static byte analogLxMax = DEFAULT_ANALOG_LX_MAX;
-static short jogconDialMax = DEFAULT_JOGCON_DIAL_MAX;
-static byte negReduceHandlePlay = DEFAULT_NEG_REDUCE_HANDLE_PLAY;
-static byte negLtCurve = DEFAULT_NEG_LT_CURVE;
-static byte negRtCurve = DEFAULT_NEG_RT_CURVE;
+static ConfigParams config = {
+  .negLtCurve = DEFAULT_NEG_LT_CURVE,
+  .negRtCurve = DEFAULT_NEG_RT_CURVE,
+  .negReduceHandlePlay = DEFAULT_NEG_REDUCE_HANDLE_PLAY,
+  .lxMax = DEFAULT_NEG_TWIST_MAX,
+  .jogconDialMax = DEFAULT_JOGCON_DIAL_MAX,
+  .stickMode = DEFAULT_STICK_MODE,
+  .analogLxMax = DEFAULT_ANALOG_LX_MAX
+};
 static volatile int ledFlashCount = 0;
 
 /// <summary>
@@ -423,7 +425,7 @@ byte restoreNegReduceHandlePlay() {
 /// XInputレポートをPCへ送信
 /// </summary>
 void send_xbox_report() {
-  if (stickMode == MODE_SETTING_NEG) {
+  if (config.stickMode == MODE_SETTING_NEG) {
     xboxcontroller_reset();
   }
   xboxcontroller_send_report();
@@ -592,7 +594,7 @@ void loop1() {  // core 0
   const byte heartbeat_speed = 32;
 
   if (ledFlashCount > 0) {
-    byte r_val = (negReduceHandlePlay == 32) ? 255 : (negReduceHandlePlay * 8);
+    byte r_val = (config.negReduceHandlePlay == 32) ? 255 : (config.negReduceHandlePlay * 8);
     byte g_val = ledLx;
     byte b_val = heartbeat_num;
 
@@ -610,7 +612,7 @@ void loop1() {  // core 0
     return;
   }
 
-  switch (stickMode) {
+  switch (config.stickMode) {
     case MODE_STD:
       // 青色ベース（標準モード、無入力時は青）
       // pixels.setPixelColor(0, pixels.Color(ledB1 / 2 + ledBL / 2, ledB2 / 2 + ledBL / 2, 0x80 + ledLx / 4));
@@ -647,9 +649,9 @@ void loop1() {  // core 0
 
     case MODE_SETTING_NEG:
       {
-        // heartbeat_num で B値（青）を明滅、ねじり値でG値（緑）を明滅、negReduceHandlePlay に比例した固定輝度で R値（赤）を点灯
+        // heartbeat_num で B値（青）を明滅、ねじり値でG値（緑）を明滅、config.negReduceHandlePlay に比例した固定輝度で R値（赤）を点灯
         // 32 * 8 = 256 となり byte (0-255) からオーバーフローして 0 に戻るのを防ぐため、32の時は255にする
-        byte r_val = (negReduceHandlePlay == 32) ? 255 : (negReduceHandlePlay * 8);
+        byte r_val = (config.negReduceHandlePlay == 32) ? 255 : (config.negReduceHandlePlay * 8);
         byte g_val = ledLx;
         pixels.setPixelColor(0, pixels.Color(r_val, g_val, heartbeat_num));
         pixels.show();
@@ -720,8 +722,10 @@ void saveConfig() {
     return m == MODE_STD || m == MODE_SWAPAB || m == MODE_SWAPLTRT ||
            m == MODE_SWAPAB_SWAPLTRT || m == MODE_AIRCON22;
   };
-  byte saveStickMode = isNormalStickMode(stickMode) ? stickMode : beforeStickMode;
-  writeConfigIni(file, negLtCurve, negRtCurve, negReduceHandlePlay, lxMax, jogconDialMax, saveStickMode, analogLxMax);
+  byte saveStickMode = isNormalStickMode(config.stickMode) ? config.stickMode : beforeStickMode;
+  ConfigParams saveConfig = config;
+  saveConfig.stickMode = saveStickMode;
+  writeConfigIni(file, saveConfig);
 
   file.close();
   config_file_writing = false;
@@ -738,13 +742,13 @@ void loadConfig() {
     if (eepromCheck() != true) {
       eepromFormat();
     }
-    negLtCurve = restoreNegLtCurve();
-    negRtCurve = restoreNegRtCurve();
-    negReduceHandlePlay = restoreNegReduceHandlePlay();
-    lxMax = restoreNegDegMax();
-    analogLxMax = restoreAnaDegMax();
-    jogconDialMax = restorejogMax();
-    stickMode = restoreNegStickMode();
+    config.negLtCurve = restoreNegLtCurve();
+    config.negRtCurve = restoreNegRtCurve();
+    config.negReduceHandlePlay = restoreNegReduceHandlePlay();
+    config.lxMax = restoreNegDegMax();
+    config.analogLxMax = restoreAnaDegMax();
+    config.jogconDialMax = restorejogMax();
+    config.stickMode = restoreNegStickMode();
     return;
   }
 
@@ -759,13 +763,13 @@ void loadConfig() {
     if (eepromCheck() != true) {
       eepromFormat();
     }
-    negLtCurve = restoreNegLtCurve();
-    negRtCurve = restoreNegRtCurve();
-    negReduceHandlePlay = restoreNegReduceHandlePlay();
-    lxMax = restoreNegDegMax();
-    analogLxMax = restoreAnaDegMax();
-    jogconDialMax = restorejogMax();
-    stickMode = restoreNegStickMode();
+    config.negLtCurve = restoreNegLtCurve();
+    config.negRtCurve = restoreNegRtCurve();
+    config.negReduceHandlePlay = restoreNegReduceHandlePlay();
+    config.lxMax = restoreNegDegMax();
+    config.analogLxMax = restoreAnaDegMax();
+    config.jogconDialMax = restorejogMax();
+    config.stickMode = restoreNegStickMode();
     return;
   }
 
@@ -776,13 +780,13 @@ void loadConfig() {
     if (eepromCheck() != true) {
       eepromFormat();
     }
-    negLtCurve = restoreNegLtCurve();
-    negRtCurve = restoreNegRtCurve();
-    negReduceHandlePlay = restoreNegReduceHandlePlay();
-    lxMax = restoreNegDegMax();
-    analogLxMax = restoreAnaDegMax();
-    jogconDialMax = restorejogMax();
-    stickMode = restoreNegStickMode();
+    config.negLtCurve = restoreNegLtCurve();
+    config.negRtCurve = restoreNegRtCurve();
+    config.negReduceHandlePlay = restoreNegReduceHandlePlay();
+    config.lxMax = restoreNegDegMax();
+    config.analogLxMax = restoreAnaDegMax();
+    config.jogconDialMax = restorejogMax();
+    config.stickMode = restoreNegStickMode();
     return;
   }
 
@@ -804,26 +808,26 @@ void loadConfig() {
       val.trim();
 
       int intVal = val.toInt();
-      if (key == "negLtCurve" && negLtCurve != (byte)intVal) {
-        negLtCurve = (byte)intVal;
+      if (key == "config.negLtCurve" && config.negLtCurve != (byte)intVal) {
+        config.negLtCurve = (byte)intVal;
         updated = true;
-      } else if (key == "negRtCurve" && negRtCurve != (byte)intVal) {
-        negRtCurve = (byte)intVal;
+      } else if (key == "config.negRtCurve" && config.negRtCurve != (byte)intVal) {
+        config.negRtCurve = (byte)intVal;
         updated = true;
-      } else if (key == "negReduceHandlePlay" && negReduceHandlePlay != (byte)intVal) {
-        negReduceHandlePlay = (byte)intVal;
+      } else if (key == "config.negReduceHandlePlay" && config.negReduceHandlePlay != (byte)intVal) {
+        config.negReduceHandlePlay = (byte)intVal;
         updated = true;
-      } else if (key == "negTwistMax" && lxMax != (byte)intVal) {
-        lxMax = (byte)intVal;
+      } else if (key == "negTwistMax" && config.lxMax != (byte)intVal) {
+        config.lxMax = (byte)intVal;
         updated = true;
-      } else if (key == "jogconDialMax" && jogconDialMax != (short)intVal) {
-        jogconDialMax = (short)intVal;
+      } else if (key == "config.jogconDialMax" && config.jogconDialMax != (short)intVal) {
+        config.jogconDialMax = (short)intVal;
         updated = true;
-      } else if (key == "stickMode" && stickMode != (byte)intVal) {
-        stickMode = (byte)intVal;
+      } else if (key == "config.stickMode" && config.stickMode != (byte)intVal) {
+        config.stickMode = (byte)intVal;
         updated = true;
-      } else if (key == "analogLxMax" && analogLxMax != (byte)intVal) {
-        analogLxMax = (byte)intVal;
+      } else if (key == "config.analogLxMax" && config.analogLxMax != (byte)intVal) {
+        config.analogLxMax = (byte)intVal;
         updated = true;
       }
     }
@@ -837,31 +841,36 @@ void loadConfig() {
 
   // ファイルシステム読み込み完了後、既存コード内のEEPROM.read()との互換性のためRAMバッファにミラー同期しておく
   if (fs_ready) {
-    ::EEPROM.write(EEPADR_NEGMODE, stickMode);
-    ::EEPROM.write(EEPADR_NEG_NEGMAX, lxMax);
-    ::EEPROM.write(EEPADR_ANALOG_STICKMAX, analogLxMax);
-    ::EEPROM.write(EEPADR_JOG_MAX_U, (byte)(jogconDialMax >> 8));
-    ::EEPROM.write(EEPADR_JOG_MAX_L, (byte)(jogconDialMax & 0x00ff));
-    ::EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1); // ゲタ（+1）
-    ::EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, negLtCurve);
-    ::EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, negRtCurve);
+    ::EEPROM.write(EEPADR_NEGMODE, config.stickMode);
+    ::EEPROM.write(EEPADR_NEG_NEGMAX, config.lxMax);
+    ::EEPROM.write(EEPADR_ANALOG_STICKMAX, config.analogLxMax);
+    ::EEPROM.write(EEPADR_JOG_MAX_U, (byte)(config.jogconDialMax >> 8));
+    ::EEPROM.write(EEPADR_JOG_MAX_L, (byte)(config.jogconDialMax & 0x00ff));
+    ::EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, config.negReduceHandlePlay + 1); // ゲタ（+1）
+    ::EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, config.negLtCurve);
+    ::EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, config.negRtCurve);
   }
 
   // フェールセーフとして、PCから書き換えられた値をEEPROMバックアップ側にも同期保存する
-  // (ただし、ファイルシステムが無効なフォールバック時のみ実行し、ファイルシステム動作時はフリーズ防止のため実行しない)
-  if (updated && !fs_ready) {
+  // (更新があった場合、Core 1を一時停止して安全に物理Flashにコミットする)
+  if (updated && fs_ready) {
+    flash_busy = true; // Core 1 の動作を一時停止
+    delay(10);
     uint32_t ints = save_and_disable_interrupts();
     ::EEPROM.write(0, 'c');
     ::EEPROM.write(1, 'f');
     ::EEPROM.write(2, '1');
-    ::EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, negLtCurve);
-    ::EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, negRtCurve);
-    ::EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1); // ゲタ（+1）
-    ::EEPROM.write(EEPADR_NEG_NEGMAX, lxMax);
-    ::EEPROM.write(EEPADR_JOG_MAX_U, (byte)(jogconDialMax >> 8));
-    ::EEPROM.write(EEPADR_JOG_MAX_L, (byte)(jogconDialMax & 0x00ff));
+    ::EEPROM.write(EEPADR_NEGMODE, config.stickMode);
+    ::EEPROM.write(EEPADR_NEG_NEGMAX, config.lxMax);
+    ::EEPROM.write(EEPADR_ANALOG_STICKMAX, config.analogLxMax);
+    ::EEPROM.write(EEPADR_JOG_MAX_U, (byte)(config.jogconDialMax >> 8));
+    ::EEPROM.write(EEPADR_JOG_MAX_L, (byte)(config.jogconDialMax & 0x00ff));
+    ::EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, config.negReduceHandlePlay + 1); // ゲタ（+1）
+    ::EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, config.negLtCurve);
+    ::EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, config.negRtCurve);
     ::EEPROM.commit();
     restore_interrupts(ints);
+    flash_busy = false; // Core 1 の動作を再開
   }
 }
 
@@ -872,13 +881,13 @@ void migrateOrInitConfig() {
   if (!fs_ready) return;
 
   if (eepromCheck() == true) {
-    negLtCurve = restoreNegLtCurve();
-    negRtCurve = restoreNegRtCurve();
-    negReduceHandlePlay = restoreNegReduceHandlePlay();
-    lxMax = restoreNegDegMax();
-    analogLxMax = restoreAnaDegMax();
-    jogconDialMax = restorejogMax();
-    stickMode = restoreNegStickMode();
+    config.negLtCurve = restoreNegLtCurve();
+    config.negRtCurve = restoreNegRtCurve();
+    config.negReduceHandlePlay = restoreNegReduceHandlePlay();
+    config.lxMax = restoreNegDegMax();
+    config.analogLxMax = restoreAnaDegMax();
+    config.jogconDialMax = restorejogMax();
+    config.stickMode = restoreNegStickMode();
     saveConfig();
   } else {
     // 無ければ CONFIG.INI をテンプレートからデフォルト値で生成
@@ -922,7 +931,7 @@ void setup() {
   if (boot_magic == 0xAB0057C0) {
     usb_mode_msc = true;
     msc_active_connected = false;
-    stickMode = MODE_USB_MSC;
+    config.stickMode = MODE_USB_MSC;
     Serial.printf("[%lu] Mode: USB MSC (Mass Storage Class)\n", millis());
   } else {
     usb_mode_msc = false;
@@ -988,19 +997,19 @@ void setup() {
   if (!usb_mode_msc) {
     loadConfig();
     Serial.printf("[%lu] Active Config values:\n", millis());
-    Serial.printf("  negLtCurve: %d\n", negLtCurve);
-    Serial.printf("  negRtCurve: %d\n", negRtCurve);
-    Serial.printf("  negReduceHandlePlay: %d\n", negReduceHandlePlay);
-    Serial.printf("  negTwistMax: %d\n", lxMax);
-    Serial.printf("  jogconDialMax: %d\n", jogconDialMax);
-    Serial.printf("  stickMode: %d\n", stickMode);
-    Serial.printf("  analogLxMax: %d\n", analogLxMax);
+    Serial.printf("  config.negLtCurve: %d\n", config.negLtCurve);
+    Serial.printf("  config.negRtCurve: %d\n", config.negRtCurve);
+    Serial.printf("  config.negReduceHandlePlay: %d\n", config.negReduceHandlePlay);
+    Serial.printf("  negTwistMax: %d\n", config.lxMax);
+    Serial.printf("  config.jogconDialMax: %d\n", config.jogconDialMax);
+    Serial.printf("  config.stickMode: %d\n", config.stickMode);
+    Serial.printf("  config.analogLxMax: %d\n", config.analogLxMax);
   }
 
   // (他コア再開処理を削除)
 
   if (!usb_mode_msc) {
-    stickMode = MODE_LOST;
+    config.stickMode = MODE_LOST;
   }
   delay(300);
 
@@ -1074,15 +1083,15 @@ void toggle_stick_mode() {
   // コントローラーが neGcon または Jogcon の場合のみスワップ切り替えをローテーションします
   if ((OldpsxStickMode == PSPROTO_NEGCON) || (OldpsxStickMode == PSPROTO_JOGCON)) {
     // STD（標準）-> SWAPAB（ABスワップ）-> SWAPLTRT（LTRTスワップ）-> SWAPAB_SWAPLTRT（両方スワップ）
-    if (stickMode == MODE_STD) stickMode = MODE_SWAPAB;
-    else if (stickMode == MODE_SWAPAB) stickMode = MODE_SWAPLTRT;
-    else if (stickMode == MODE_SWAPLTRT) stickMode = MODE_SWAPAB_SWAPLTRT;
-    else if (stickMode == MODE_SWAPAB_SWAPLTRT) stickMode = MODE_STD;
-    else stickMode = MODE_STD;
+    if (config.stickMode == MODE_STD) config.stickMode = MODE_SWAPAB;
+    else if (config.stickMode == MODE_SWAPAB) config.stickMode = MODE_SWAPLTRT;
+    else if (config.stickMode == MODE_SWAPLTRT) config.stickMode = MODE_SWAPAB_SWAPLTRT;
+    else if (config.stickMode == MODE_SWAPAB_SWAPLTRT) config.stickMode = MODE_STD;
+    else config.stickMode = MODE_STD;
 
     // 新しい設定モードを内蔵EEPROMに書き込み、コミットして確定させます
     Serial.printf("[%lu] EEP Write!\n", millis());
-    EEPROM.write(EEPADR_NEGMODE, stickMode);
+    EEPROM.write(EEPADR_NEGMODE, config.stickMode);
     EEPROM.commit();
   }
 }
@@ -1119,7 +1128,7 @@ void process_setting_mode() {
       // 短押し閾値（約70ms以上）に達したら変更フラグを有効化
       if (!changeNegStickMode) {
         changeNegStickMode = true;
-        Serial.printf("[%lu] Current Stick mode is: %d\n", millis(), stickMode);
+        Serial.printf("[%lu] Current Stick mode is: %d\n", millis(), config.stickMode);
       }
     }
   } else {
@@ -1131,9 +1140,9 @@ void process_setting_mode() {
       toggle_stick_mode();
 
       // モード切り替え後、設定モード（MODE_SETTING_NEG）を抜けて切り替えた通常動作モードへ復帰します
-      if (stickMode == MODE_SETTING_NEG) stickMode = beforeStickMode;
+      if (config.stickMode == MODE_SETTING_NEG) config.stickMode = beforeStickMode;
 
-      Serial.printf("[%lu] Change Stick mode is: %d\n", millis(), stickMode);
+      Serial.printf("[%lu] Change Stick mode is: %d\n", millis(), config.stickMode);
     }
 
     // ボタンの状態変数とカウンタをリセットして次の操作に備えます
@@ -1163,12 +1172,12 @@ void process_controller_mode() {
       unsigned long pressDuration = millis() - bootselPressStart;
       if (pressDuration >= 3000) {
         // 約3秒（3000ms）押し続けられた場合、対応するアナログコントローラーが接続されていれば設定モードへ移行
-        if (stickMode != MODE_SETTING_NEG) {
+        if (config.stickMode != MODE_SETTING_NEG) {
           if ((OldpsxStickMode == PSPROTO_NEGCON) || (OldpsxStickMode == PSPROTO_JOGCON) || (OldpsxStickMode == PSPROTO_FLIGHTSTICK)) {
             Serial.printf("[%lu] Set Config mode\n", millis());
             changeNegStickMode = false;
-            beforeStickMode = stickMode;     // 設定完了後の復帰用に現在の動作モードを退避
-            stickMode = MODE_SETTING_NEG;   // 動作状態を設定モード（MODE_SETTING_NEG）に切り替える
+            beforeStickMode = config.stickMode;     // 設定完了後の復帰用に現在の動作モードを退避
+            config.stickMode = MODE_SETTING_NEG;   // 動作状態を設定モード（MODE_SETTING_NEG）に切り替える
             bootselPressStart = 0;           // 移行したのでタイマーリセット
             bootselWaitingForRelease = true; // ボタンがいったん離されるまで設定モード側のトグル判定を抑止
           }
@@ -1177,7 +1186,7 @@ void process_controller_mode() {
         // 短押し閾値（約70ms以上）に達したら変更フラグを有効化
         if (!changeNegStickMode) {
           changeNegStickMode = true;
-          Serial.printf("[%lu] Current Stick mode is: %d\n", millis(), stickMode);
+          Serial.printf("[%lu] Current Stick mode is: %d\n", millis(), config.stickMode);
         }
       }
     }
@@ -1188,7 +1197,7 @@ void process_controller_mode() {
     // ボタンが短押しされたと判定されている場合、通常モード時にもスティックモード（スワップ設定）の切り替えを行います
     if (changeNegStickMode) {
       toggle_stick_mode();
-      Serial.printf("[%lu] Change Stick mode is: %d\n", millis(), stickMode);
+      Serial.printf("[%lu] Change Stick mode is: %d\n", millis(), config.stickMode);
     }
 
     changeNegStickMode = false;
@@ -1205,7 +1214,7 @@ void process_controller_mode() {
 void loop() {
   if (usb_mode_msc) {
     process_msc_mode();
-  } else if (stickMode == MODE_SETTING_NEG) {
+  } else if (config.stickMode == MODE_SETTING_NEG) {
     process_setting_mode();
   } else {
     process_controller_mode();
@@ -1241,10 +1250,10 @@ void process_flightstick(ControllerState *state) {
     srx = state->r_x;
     sry = state->r_y;
 
-    state->l_x = (byte)adjustXY(state->l_x, analogLxMax);
-    state->l_y = (byte)adjustXY(state->l_y, analogLxMax);
-    state->r_x = (byte)adjustXY(state->r_x, analogLxMax);
-    state->r_y = (byte)adjustXY(state->r_y, analogLxMax);
+    state->l_x = (byte)adjustXY(state->l_x, config.analogLxMax);
+    state->l_y = (byte)adjustXY(state->l_y, config.analogLxMax);
+    state->r_x = (byte)adjustXY(state->r_x, config.analogLxMax);
+    state->r_y = (byte)adjustXY(state->r_y, config.analogLxMax);
 
     // デバッグ表示用LED状態に反映
     ledLx = state->l_x;
@@ -1267,7 +1276,7 @@ void process_flightstick(ControllerState *state) {
     }
     // CIRCLE（赤）ボタンで現在のスティック最大傾きを計測し、最大角としてEEPROMに保存します
     if (psx.getButtonWord() & PSB_CIRCLE) {
-      Serial.printf("[%lu] Analog lxMax before: %d\n", millis(), analogLxMax);
+      Serial.printf("[%lu] Analog config.lxMax before: %d\n", millis(), config.analogLxMax);
       state->l_x_tmp = absoluteXY(state->lx_org);
 
       state->xy_tmp = absoluteXY(state->ly_org);
@@ -1282,13 +1291,13 @@ void process_flightstick(ControllerState *state) {
       // 傾きが小さすぎる（センター近辺）の場合は異常値とみなし、初期値(255)へ強制リセットします
       if (state->l_x_tmp < (0x80 + 10)) state->l_x_tmp = 255;
 
-      analogLxMax = (byte)state->l_x_tmp;
+      config.analogLxMax = (byte)state->l_x_tmp;
       Serial.printf("[%lu] EEP Write!\n", millis());
-      EEPROM.write(EEPADR_ANALOG_STICKMAX, analogLxMax);
+      EEPROM.write(EEPADR_ANALOG_STICKMAX, config.analogLxMax);
       EEPROM.commit();
 
-      Serial.printf("[%lu] Analog lxMax after: %d\n", millis(), analogLxMax);
-      stickMode = beforeStickMode; // 設定完了したため通常モードへ戻る
+      Serial.printf("[%lu] Analog config.lxMax after: %d\n", millis(), config.analogLxMax);
+      config.stickMode = beforeStickMode; // 設定完了したため通常モードへ戻る
     }
   }
 
@@ -1300,7 +1309,7 @@ void process_flightstick(ControllerState *state) {
 /// </summary>
 void process_negcon(ControllerState *state) {
   // スワップ（STD, SWAPAB, SWAPLTRT, SWAPAB_SWAPLTRT）を考慮したデジタルマッピング
-  if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+  if (config.stickMode == MODE_STD || config.stickMode == MODE_SWAPAB || config.stickMode == MODE_SWAPLTRT || config.stickMode == MODE_SWAPAB_SWAPLTRT) {
     uint16_t buttons = psx.getButtonWord();
 
     // START長押し＋各キーのメタモードがアクティブである場合のショートカットキー割り当て
@@ -1341,7 +1350,7 @@ void process_negcon(ControllerState *state) {
 
       // A（Triangle）/ B（Circle）ボタンのマッピング。ABスワップ設定が有効なら入れ替えます
       if (metaState != META_STATE_START_PRESSED) {
-        if (stickMode == MODE_SWAPAB || stickMode == MODE_SWAPAB_SWAPLTRT) {
+        if (config.stickMode == MODE_SWAPAB || config.stickMode == MODE_SWAPAB_SWAPLTRT) {
           if (buttons & PSB_TRIANGLE)
             XboxButtonData.digital_buttons_2 |= XINPUT_GAMEPAD_B;
           if (buttons & PSB_CIRCLE)
@@ -1365,12 +1374,12 @@ void process_negcon(ControllerState *state) {
     state->bL_org = psx.getAnalogButton(PsxAnalogButton::PSAB_L1);
 
     state->l_x = state->lx_org;
-    state->l_x = (byte)adjustXY(state->l_x, lxMax); // ねじりのキャリブレーション補正
+    state->l_x = (byte)adjustXY(state->l_x, config.lxMax); // ねじりのキャリブレーション補正
     byte lx_scaled_no_play = state->l_x;
 
     // 設定された遊びの削減値（デッドゾーン相殺）をねじり値に適用します
     int lx_tmp = state->l_x;
-    int play = negReduceHandlePlay*2;
+    int play = config.negReduceHandlePlay*2;
     if (lx_tmp > 128) {
       lx_tmp += play;
       if (lx_tmp > 255) lx_tmp = 255;
@@ -1408,7 +1417,7 @@ void process_negcon(ControllerState *state) {
 
       // メタモード中：II/Lアナログボタンによる左スティックY軸の操作（スワップおよび上昇・下降向き）
       int16_t stick_val = 0;
-      bool swapMode = (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT);
+      bool swapMode = (config.stickMode == MODE_SWAPLTRT || config.stickMode == MODE_SWAPAB_SWAPLTRT);
 
       if (swapMode) {
         if (state->l_b2 > 10) {
@@ -1428,25 +1437,25 @@ void process_negcon(ControllerState *state) {
       XboxButtonData.l_x = 0;
     } else {
       // 通常モード時：アナログ値をLT/RTトリガーに割り当て（LTRTスワップ設定を考慮）
-      if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+      if (config.stickMode == MODE_STD || config.stickMode == MODE_SWAPAB || config.stickMode == MODE_SWAPLTRT || config.stickMode == MODE_SWAPAB_SWAPLTRT) {
         digitalWrite(PIN_CONNECT, LOW);
         
-        if (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+        if (config.stickMode == MODE_SWAPLTRT || config.stickMode == MODE_SWAPAB_SWAPLTRT) {
           uint16_t raw_rt = (uint16_t)state->l_b2 * 2;
           byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
-          XboxButtonData.rt = applyAnalogCurve(rt_val, negLtCurve); // RTにIIボタン(カーブ適用)を代入
+          XboxButtonData.rt = applyAnalogCurve(rt_val, config.negLtCurve); // RTにIIボタン(カーブ適用)を代入
 
           uint16_t raw_lt = (uint16_t)state->l_bL * 2;
           byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
-          XboxButtonData.lt = applyAnalogCurve(lt_val, negRtCurve); // LTにLボタン(カーブ適用)を代入
+          XboxButtonData.lt = applyAnalogCurve(lt_val, config.negRtCurve); // LTにLボタン(カーブ適用)を代入
         } else {
           uint16_t raw_lt = (uint16_t)state->l_b2 * 2;
           byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
-          XboxButtonData.lt = applyAnalogCurve(lt_val, negLtCurve); // LTにIIボタン(カーブ適用)を代入
+          XboxButtonData.lt = applyAnalogCurve(lt_val, config.negLtCurve); // LTにIIボタン(カーブ適用)を代入
 
           uint16_t raw_rt = (uint16_t)state->l_bL * 2;
           byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
-          XboxButtonData.rt = applyAnalogCurve(rt_val, negRtCurve); // RTにLボタン(カーブ適用)を代入
+          XboxButtonData.rt = applyAnalogCurve(rt_val, config.negRtCurve); // RTにLボタン(カーブ適用)を代入
         }
       }
       XboxButtonData.r_x = 0;
@@ -1493,38 +1502,38 @@ void process_negcon(ControllerState *state) {
 
       // L1ボタン（Lボタン）押下でRTアナログ感度カーブ（0:線形〜3:二次関数曲線）をローテーション変更しEEPROMに保存
       if ((buttons & PSB_L1) && !(lastButtons & PSB_L1)) {
-        negRtCurve = (negRtCurve + 1) % 4;
-        EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, negRtCurve);
+        config.negRtCurve = (config.negRtCurve + 1) % 4;
+        EEPROM.write(EEPADR_NEG_ANALOG_RT_CURVE, config.negRtCurve);
         EEPROM.commit();
-        Serial.printf("[%lu] NEG_ANALOG_RT_CURVE: %d\n", millis(), negRtCurve);
-        ledFlashCount = negRtCurve + 1; // 変更後のカーブ種類をLED明滅回数で通知
+        Serial.printf("[%lu] NEG_ANALOG_RT_CURVE: %d\n", millis(), config.negRtCurve);
+        ledFlashCount = config.negRtCurve + 1; // 変更後のカーブ種類をLED明滅回数で通知
       }
 
       // SQUAREボタン（IIボタン）押下でLTアナログ感度カーブをローテーション変更しEEPROMに保存
       if ((buttons & PSB_SQUARE) && !(lastButtons & PSB_SQUARE)) {
-        negLtCurve = (negLtCurve + 1) % 4;
-        EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, negLtCurve);
+        config.negLtCurve = (config.negLtCurve + 1) % 4;
+        EEPROM.write(EEPADR_NEG_ANALOG_LT_CURVE, config.negLtCurve);
         EEPROM.commit();
-        Serial.printf("[%lu] NEG_ANALOG_LT_CURVE: %d\n", millis(), negLtCurve);
-        ledFlashCount = negLtCurve + 1; // 変更後のカーブ種類をLED明滅回数で通知
+        Serial.printf("[%lu] NEG_ANALOG_LT_CURVE: %d\n", millis(), config.negLtCurve);
+        ledFlashCount = config.negLtCurve + 1; // 変更後のカーブ種類をLED明滅回数で通知
       }
 
       // 十字キー上ボタンでハンドルの遊び削減値（デッドゾーンの詰め量）を増加（感度を高める）しEEPROM保存
       if ((buttons & PSB_PAD_UP) && !(lastButtons & PSB_PAD_UP)) {
-        if (negReduceHandlePlay < 32) {
-          negReduceHandlePlay++;
-          EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1);
+        if (config.negReduceHandlePlay < 32) {
+          config.negReduceHandlePlay++;
+          EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, config.negReduceHandlePlay + 1);
           EEPROM.commit();
-          Serial.printf("[%lu] NEG_REDUCE_HANDLE_PLAY: %d\n", millis(), negReduceHandlePlay);
+          Serial.printf("[%lu] NEG_REDUCE_HANDLE_PLAY: %d\n", millis(), config.negReduceHandlePlay);
         }
       }
       // 十字キー下ボタンでハンドルの遊び削減値（デッドゾーンの詰め量）を減少（感度を下げる）しEEPROM保存
       if ((buttons & PSB_PAD_DOWN) && !(lastButtons & PSB_PAD_DOWN)) {
-        if (negReduceHandlePlay > 0) {
-          negReduceHandlePlay--;
-          EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, negReduceHandlePlay + 1);
+        if (config.negReduceHandlePlay > 0) {
+          config.negReduceHandlePlay--;
+          EEPROM.write(EEPADR_NEG_REDUCE_HANDLE_PLAY, config.negReduceHandlePlay + 1);
           EEPROM.commit();
-          Serial.printf("[%lu] NEG_REDUCE_HANDLE_PLAY: %d\n", millis(), negReduceHandlePlay);
+          Serial.printf("[%lu] NEG_REDUCE_HANDLE_PLAY: %d\n", millis(), config.negReduceHandlePlay);
         }
       }
       // STARTボタン押下でUSB MSC（マスストレージ）接続モードへリブート
@@ -1533,19 +1542,19 @@ void process_negcon(ControllerState *state) {
       }
       // CIRCLE（赤）ボタン押下で、現在のハンドルねじり量を「最大ねじり角」としてキャリブレーション保存
       if ((buttons & PSB_CIRCLE) && !(lastButtons & PSB_CIRCLE)) {
-        Serial.printf("[%lu] neG lxMax before: %d\n", millis(), lxMax);
+        Serial.printf("[%lu] neG config.lxMax before: %d\n", millis(), config.lxMax);
 
         state->l_x_tmp = absoluteXY(state->lx_org);
         // センター近辺の無効値の場合は強制初期化
         if (state->l_x_tmp < (0x80 + 10)) state->l_x_tmp = 0xff / ((NEG_CALIB - 1) / 2 + 1);
 
-        lxMax = (byte)state->l_x_tmp;
+        config.lxMax = (byte)state->l_x_tmp;
         Serial.printf("[%lu] EEP Write!\n", millis());
-        EEPROM.write(EEPADR_NEG_NEGMAX, lxMax);
+        EEPROM.write(EEPADR_NEG_NEGMAX, config.lxMax);
         EEPROM.commit();
 
-        Serial.printf("[%lu] neG lxMax after: %d\n", millis(), lxMax);
-        stickMode = beforeStickMode; // 設定完了したため通常モードへ戻る
+        Serial.printf("[%lu] neG config.lxMax after: %d\n", millis(), config.lxMax);
+        config.stickMode = beforeStickMode; // 設定完了したため通常モードへ戻る
       }
 
       lastButtons = buttons;
@@ -1598,7 +1607,7 @@ void process_jogcon(ControllerState *state) {
     keyConvert_psx2xbox_ex(masked_buttons);
 
     // ABスワップ設定が有効なら入れ替えます
-    if (stickMode == MODE_SWAPAB || stickMode == MODE_SWAPAB_SWAPLTRT) {
+    if (config.stickMode == MODE_SWAPAB || config.stickMode == MODE_SWAPAB_SWAPLTRT) {
       if (metaState != META_STATE_START_PRESSED) {
         uint8_t a_pressed = XboxButtonData.digital_buttons_2 & XINPUT_GAMEPAD_A;
         uint8_t b_pressed = XboxButtonData.digital_buttons_2 & XINPUT_GAMEPAD_B;
@@ -1611,11 +1620,11 @@ void process_jogcon(ControllerState *state) {
 
   // ジョグダイヤルのアナログ値（回転位置）の読み込み
   if (psx.getJogConAnalog(state->jogx)) {
-    // 設定された最大回転角（jogconDialMax）を超えて回された場合、反力モータを回してダイヤルを押し戻す反力（Forceback）を設定します
+    // 設定された最大回転角（config.jogconDialMax）を超えて回された場合、反力モータを回してダイヤルを押し戻す反力（Forceback）を設定します
     jogxForcePower = 0;
     if (!state->is_setting) {
-      if (jogcon_abs_val(state->jogx) > jogconDialMax + JOG_MAX_AJST) {
-        jogxForcePower = (jogcon_abs_val(state->jogx) - (jogconDialMax + JOG_MAX_AJST)) / 2;
+      if (jogcon_abs_val(state->jogx) > config.jogconDialMax + JOG_MAX_AJST) {
+        jogxForcePower = (jogcon_abs_val(state->jogx) - (config.jogconDialMax + JOG_MAX_AJST)) / 2;
         if (jogxForcePower > 0x0f) jogxForcePower = 0x0f;
       }
       if (jogxForcePower == 0) {
@@ -1630,11 +1639,11 @@ void process_jogcon(ControllerState *state) {
     }
 
     // ダイヤルの回転量をXbox 360の左アナログスティックX軸の範囲（±32767）にマッピング
-    int32_t calc_lx = (int32_t)32767 * state->jogx / jogconDialMax;
+    int32_t calc_lx = (int32_t)32767 * state->jogx / config.jogconDialMax;
     if (calc_lx > 32767) calc_lx = 32767;
     if (calc_lx < -32768) calc_lx = -32768;
-    state->l_x = 0x80 + (byte)(0x80 * state->jogx / jogconDialMax);
-    if (jogcon_abs_val(state->jogx) >= jogconDialMax) state->l_x = (state->jogx < 0) ? 0x00 : 0xff;
+    state->l_x = 0x80 + (byte)(0x80 * state->jogx / config.jogconDialMax);
+    if (jogcon_abs_val(state->jogx) >= config.jogconDialMax) state->l_x = (state->jogx < 0) ? 0x00 : 0xff;
 
     state->b1_org = 0x00;
     state->b2_org = 0x00;
@@ -1664,28 +1673,28 @@ void process_jogcon(ControllerState *state) {
     XboxButtonData.l_y = 0;
 
     // ゲームモードが有効な場合アナログ値でアクセル・ブレーキが設定可能 (スワップ考慮)
-    if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
-      if (stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
+    if (config.stickMode == MODE_STD || config.stickMode == MODE_SWAPAB || config.stickMode == MODE_SWAPLTRT || config.stickMode == MODE_SWAPAB_SWAPLTRT) {
+      if (config.stickMode == MODE_SWAPLTRT || config.stickMode == MODE_SWAPAB_SWAPLTRT) {
         // LT/RT スワップ (I = RT, II = LT)
         uint16_t raw_rt = (uint16_t)state->l_b1 * 2;
         uint16_t raw_lt = (uint16_t)state->l_b2 * 2;
         byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
         byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
-        XboxButtonData.rt = applyAnalogCurve(rt_val, negLtCurve); // 物理Iボタンの補正を適用
-        XboxButtonData.lt = applyAnalogCurve(lt_val, negRtCurve); // 物理IIボタンの補正を適用
+        XboxButtonData.rt = applyAnalogCurve(rt_val, config.negLtCurve); // 物理Iボタンの補正を適用
+        XboxButtonData.lt = applyAnalogCurve(lt_val, config.negRtCurve); // 物理IIボタンの補正を適用
       } else {
         // 標準アサイン (I = LT, II = RT)
         uint16_t raw_lt = (uint16_t)state->l_b1 * 2;
         uint16_t raw_rt = (uint16_t)state->l_b2 * 2;
         byte lt_val = (raw_lt > 255) ? 255 : raw_lt;
         byte rt_val = (raw_rt > 255) ? 255 : raw_rt;
-        XboxButtonData.lt = applyAnalogCurve(lt_val, negLtCurve);
-        XboxButtonData.rt = applyAnalogCurve(rt_val, negRtCurve);
+        XboxButtonData.lt = applyAnalogCurve(lt_val, config.negLtCurve);
+        XboxButtonData.rt = applyAnalogCurve(rt_val, config.negRtCurve);
       }
     }
 
     // 最大角、設定モード
-    if (stickMode == MODE_SETTING_NEG) {
+    if (config.stickMode == MODE_SETTING_NEG) {
       if (jogxPosResetEnable < 100) {
         if (jogcon_abs_val(state->jogx) > 4) {
           jogxPosResetEnable = 0;
@@ -1706,19 +1715,19 @@ void process_jogcon(ControllerState *state) {
           xboxcontroller_reconnect(true); // MSCモードへ移行（リセット）
         }
         if (psx.getButtonWord() & PSB_CIRCLE) {
-          Serial.printf("[%lu] Jogcon jogconDialMax before: %d\n", millis(), jogconDialMax);
+          Serial.printf("[%lu] Jogcon config.jogconDialMax before: %d\n", millis(), config.jogconDialMax);
           //センターからの相対値に変更
-          jogconDialMax = jogcon_abs_val(state->jogx);
+          config.jogconDialMax = jogcon_abs_val(state->jogx);
           //センター値近辺の場合は初期値に設定
-          if (jogconDialMax <= 8) jogconDialMax = 100;
+          if (config.jogconDialMax <= 8) config.jogconDialMax = 100;
 
           Serial.printf("[%lu] EEP Write!\n", millis());
-          EEPROM.write(EEPADR_JOG_MAX_U, (byte)(jogconDialMax >> 8));
-          EEPROM.write(EEPADR_JOG_MAX_L, (byte)(jogconDialMax & 0x00ff));
+          EEPROM.write(EEPADR_JOG_MAX_U, (byte)(config.jogconDialMax >> 8));
+          EEPROM.write(EEPADR_JOG_MAX_L, (byte)(config.jogconDialMax & 0x00ff));
           EEPROM.commit();
 
-          Serial.printf("[%lu] Jogcon jogconDialMax after: %d\n", millis(), jogconDialMax);
-          stickMode = beforeStickMode;
+          Serial.printf("[%lu] Jogcon config.jogconDialMax after: %d\n", millis(), config.jogconDialMax);
+          config.stickMode = beforeStickMode;
         }
       }
     } else {
@@ -1827,7 +1836,7 @@ void disconnect_controller() {
   haveController = false;
   psxContType = PSCTRL_UNKNOWN;
   OldpsxStickMode = PSPROTO_UNKNOWN;
-  stickMode = MODE_LOST;
+  config.stickMode = MODE_LOST;
 
   // ホストPCへのキー出力を無入力状態にリセット
   xboxcontroller_reset();
@@ -1842,10 +1851,10 @@ void process_connected_controller(bool is_setting, unsigned long now) {
 
   // デバイスが切り替わった、またはアナログモードボタンが押されるなどしてプロトコルが変わった場合の検知
   if (psxStickMode != OldpsxStickMode) {
-    if (psxStickMode == PSPROTO_DIGITAL) stickMode = MODE_STD;
-    if (psxStickMode == PSPROTO_FLIGHTSTICK) stickMode = MODE_AIRCON22;
-    if ((psxStickMode == PSPROTO_DUALSHOCK) || (psxStickMode == PSPROTO_DUALSHOCK2)) stickMode = MODE_STD;
-    if ((psxStickMode == PSPROTO_NEGCON) || (psxStickMode == PSPROTO_JOGCON)) stickMode = restoreNegStickMode(); // 内蔵設定を復元
+    if (psxStickMode == PSPROTO_DIGITAL) config.stickMode = MODE_STD;
+    if (psxStickMode == PSPROTO_FLIGHTSTICK) config.stickMode = MODE_AIRCON22;
+    if ((psxStickMode == PSPROTO_DUALSHOCK) || (psxStickMode == PSPROTO_DUALSHOCK2)) config.stickMode = MODE_STD;
+    if ((psxStickMode == PSPROTO_NEGCON) || (psxStickMode == PSPROTO_JOGCON)) config.stickMode = restoreNegStickMode(); // 内蔵設定を復元
 
     // Jogconが接続された場合のみ、追加でRumble（反力用）のセットアップを行います
     if (psxStickMode == PSPROTO_JOGCON) {
