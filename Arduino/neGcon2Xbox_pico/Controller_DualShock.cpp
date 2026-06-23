@@ -1,17 +1,13 @@
 #include "Controller_DualShock.h"
 #include "neGcon2Xbox_pico.h"
+#include "SubCore.h"
 
 /// <summary>
 /// DualShock / DualShock 2 の入力処理
 /// </summary>
 /// <param name="state">コントローラ状態へのポインタ</param>
-void process_dualshock(ControllerState *state) {
+void DualShockController::process(ControllerState *state) {
   // ファイルスコープに静的な入力キャッシュを保持 (グローバル変数の削減)
-  static byte slx = 0;
-  static byte sly = 0;
-  static byte srx = 0;
-  static byte sry = 0;
-
   // ボタン情報をXInputにマッピング
   keyConvert_psx2xbox();
 
@@ -39,10 +35,7 @@ void process_dualshock(ControllerState *state) {
     sly = state->l_y;
     srx = state->r_x;
     sry = state->r_y;
-    ledLx = state->l_x;
-    ledLy = state->l_y;
-    ledRx = state->r_x;
-    ledRy = state->r_y;
+    SubCoreApp::getInstance().updateLedState(state);
   }
 
   // 軸の代入 (Xbox仕様にスケーリング)

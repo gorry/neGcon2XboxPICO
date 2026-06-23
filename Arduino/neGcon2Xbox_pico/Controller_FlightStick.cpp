@@ -1,17 +1,13 @@
 #include "Controller_FlightStick.h"
 #include "neGcon2Xbox_pico.h"
+#include "SubCore.h"
 
 /// <summary>
 /// FLIGHTSTICK (SPCH-1110) の入力処理
 /// </summary>
 /// <param name="state">コントローラ状態へのポインタ</param>
-void process_flightstick(ControllerState *state) {
+void FlightStickController::process(ControllerState *state) {
   // ファイルローカルに静的な入力キャッシュを保持 (不要なグローバル変数の削減)
-  static byte slx = 0;
-  static byte sly = 0;
-  static byte srx = 0;
-  static byte sry = 0;
-
   // 右スティック（アナログ値）の取得
   if (psx.getRightAnalog(state->lx_org, state->ly_org)) {
     state->l_x = state->lx_org;
@@ -43,10 +39,7 @@ void process_flightstick(ControllerState *state) {
     state->r_y = (byte)adjustXY(state->r_y, config.analogLxMax);
 
     // デバッグ表示用LED状態に反映
-    ledLx = state->l_x;
-    ledLy = state->l_y;
-    ledRx = state->r_x;
-    ledRy = state->r_y;
+    SubCoreApp::getInstance().updateLedState(state);
   }
 
   // Xboxコントローラー形式（±32767）にスケーリングして軸データへ代入

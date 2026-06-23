@@ -206,7 +206,7 @@ void setup() {
   // 設定ファイルのロード (通常コントローラーモード時のみロードし、MSCモード時はスキップしてフリーズを防ぐ)
   if (!usb_mode_msc) {
     loadConfig();
-    stickMode = stickMode; // ロードした設定値で状態を同期
+    stickMode = config.stickMode; // ロードした設定値で状態を同期
     Serial.printf("[%lu] Active Config values:\n", millis());
     Serial.printf("  config.negLtCurve: %d\n", config.negLtCurve);
     Serial.printf("  config.negRtCurve: %d\n", config.negRtCurve);
@@ -511,8 +511,7 @@ void process_connected_controller(bool is_setting, unsigned long now) {
     if (psxStickMode == PSPROTO_FLIGHTSTICK) stickMode = MODE_AIRCON22;
     if ((psxStickMode == PSPROTO_DUALSHOCK) || (psxStickMode == PSPROTO_DUALSHOCK2)) stickMode = MODE_STD;
     if ((psxStickMode == PSPROTO_NEGCON) || (psxStickMode == PSPROTO_JOGCON)) {
-      stickMode = restoreNegStickMode(); // 内蔵設定を復元
-      config.stickMode = stickMode;      // 設定構造体側も同期
+      stickMode = config.stickMode; // 内蔵設定を復元
     }
 
     // Jogconが接続された場合のみ、追加でRumble（反力用）のセットアップを行います
@@ -599,14 +598,8 @@ void process_connected_controller(bool is_setting, unsigned long now) {
   state.is_setting   = is_setting;
   state.now          = now;
   state.psxStickMode = psxStickMode;
-  switch (psxStickMode) {
-    case PSPROTO_FLIGHTSTICK:  process_flightstick(&state);        break;
-    case PSPROTO_NEGCON:       process_negcon(&state);             break;
-    case PSPROTO_JOGCON:       process_jogcon(&state);             break;
-    case PSPROTO_DUALSHOCK2:
-    case PSPROTO_DUALSHOCK:    process_dualshock(&state);          break;
-    default:                   process_default_controller(&state); break;
-  }
+  Controller* controller = ControllerFactory::getController(psxStickMode);
+  controller->process(&state);
 
   // XInputデータ送信
   send_xbox_report();

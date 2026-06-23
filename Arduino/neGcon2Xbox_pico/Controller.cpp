@@ -1,5 +1,9 @@
 #include "Controller.h"
 #include "neGcon2Xbox_pico.h"
+#include "Controller_FlightStick.h"
+#include "Controller_neGcon.h"
+#include "Controller_JogCon.h"
+#include "Controller_DualShock.h"
 
 /// <summary>
 /// 感度カーブを適用してアナログ値を補正
@@ -7,7 +11,7 @@
 /// <param name="value">補正前のアナログ値 (0-255)</param>
 /// <param name="curveType">カーブの種類 (NEG_ANALOG_CURVE_LINEAR ~ A3)</param>
 /// <returns>補正後のアナログ値 (0-255)</returns>
-byte applyAnalogCurve(byte value, byte curveType) {
+byte Controller::applyAnalogCurve(byte value, byte curveType) {
   // 線形カーブ（補正なし）の場合はそのまま値を返す
   if (curveType == NEG_ANALOG_CURVE_LINEAR) {
     return value;
@@ -37,7 +41,7 @@ byte applyAnalogCurve(byte value, byte curveType) {
 /// </summary>
 /// <param name="lx">対象のアナログ値 (0-255)</param>
 /// <returns>0x80からの絶対偏差値</returns>
-int absoluteXY(byte lx) {
+int Controller::absoluteXY(byte lx) {
   int lx_tmp;
   // センター値 (0x80) からどの程度離れているかを計算
   if (lx < 0x80) lx_tmp = (int)(0xFF - lx);
@@ -50,7 +54,7 @@ int absoluteXY(byte lx) {
 /// </summary>
 /// <param name="x">入力値</param>
 /// <returns>入力値の絶対値</returns>
-short jogcon_abs_val(short x) {
+short Controller::jogcon_abs_val(short x) {
   // 負の値の場合は符号を反転、正の場合はそのまま返す
   return x < 0 ? -x : x;
 }
@@ -62,7 +66,7 @@ short jogcon_abs_val(short x) {
 /// <param name="lx">補正対象のアナログ値</param>
 /// <param name="max">最大キャリブレーション値</param>
 /// <returns>0-255の範囲にスケーリングされた補正後のアナログ値</returns>
-int adjustXY(byte lx, byte max) {
+int Controller::adjustXY(byte lx, byte max) {
   int lx_tmp;
 
   // センター(0x80)より大きいか小さいかで分岐して補正を計算
@@ -84,7 +88,7 @@ int adjustXY(byte lx, byte max) {
 /// PSXボタン入力をXInputボタン入力データへ変換 (拡張版)
 /// </summary>
 /// <param name="buttons">PSXコントローラーから読み取ったボタンワード</param>
-void keyConvert_psx2xbox_ex(uint16_t buttons) {
+void Controller::keyConvert_psx2xbox_ex(uint16_t buttons) {
   // D-pad (十字キー) を XInput にマッピング
   if (buttons & PSB_PAD_UP)    XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_UP;
   if (buttons & PSB_PAD_DOWN)  XboxButtonData.digital_buttons_1 |= XINPUT_GAMEPAD_DPAD_DOWN;
@@ -143,7 +147,7 @@ void keyConvert_psx2xbox_ex(uint16_t buttons) {
 /// <summary>
 /// 現在取得しているPSXボタン入力をXInputボタン入力データへ変換
 /// </summary>
-void keyConvert_psx2xbox() {
+void Controller::keyConvert_psx2xbox() {
   // psxオブジェクトから直接最新のボタン情報を取得し変換を実行
   keyConvert_psx2xbox_ex(psx.getButtonWord());
 }
@@ -152,7 +156,34 @@ void keyConvert_psx2xbox() {
 /// 未対応・デフォルトコントローラーの入力処理
 /// </summary>
 /// <param name="state">コントローラ状態へのポインタ</param>
-void process_default_controller(ControllerState *state) {
+void DefaultController::process(ControllerState *state) {
   // デフォルト処理として、単純にボタン入力を変換してXInputに代入
   keyConvert_psx2xbox();
+}
+
+/// <summary>
+/// プロトコルに応じて適切なコントローラーオブジェクトを返却します。
+/// </summary>
+/// <param name="protocol">検出されたコントローラープロトコル</param>
+/// <returns>対応するControllerインスタンスのポインタ</returns>
+Controller* ControllerFactory::getController(PsxControllerProtocol protocol) {
+  static DefaultController defaultCtrl;
+  static FlightStickController flightStickCtrl;
+  static NeGconController neGconCtrl;
+  static JogConController jogConCtrl;
+  static DualShockController dualShockCtrl;
+
+  switch (protocol) {
+    case PSPROTO_FLIGHTSTICK:
+      return &flightStickCtrl;
+    case PSPROTO_NEGCON:
+      return &neGconCtrl;
+    case PSPROTO_JOGCON:
+      return &jogConCtrl;
+    case PSPROTO_DUALSHOCK:
+    case PSPROTO_DUALSHOCK2:
+      return &dualShockCtrl;
+    default:
+      return &defaultCtrl;
+  }
 }

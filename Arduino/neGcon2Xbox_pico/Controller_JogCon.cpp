@@ -1,23 +1,16 @@
 #include "Controller_JogCon.h"
 #include "neGcon2Xbox_pico.h"
+#include "SubCore.h"
 
 // Jogcon 固有の定数と状態変数 (モジュール内に隠蔽)
 #define JOG_MAX_AJST -4
-
-static byte jogxForcePower = 0;
-static byte jogxPosResetEnable = 0;
 
 /// <summary>
 /// Jogcon の入力処理
 /// </summary>
 /// <param name="state">コントローラ状態へのポインタ</param>
-void process_jogcon(ControllerState *state) {
+void JogConController::process(ControllerState *state) {
   // ファイルスコープに静的な入力キャッシュを保持 (グローバル変数の削減)
-  static byte slx = 0;
-  static byte sb1 = 0;
-  static byte sb2 = 0;
-  static byte sbL = 0;
-
   // 標準の操作感に合わせるため、Iボタン（CROSS）とIIボタン（SQUARE）のデジタル入力を入れ替えます
   uint16_t buttons = psx.getButtonWord();
   uint16_t swapped_buttons = buttons & ~(PSB_CROSS | PSB_SQUARE);
@@ -113,11 +106,7 @@ void process_jogcon(ControllerState *state) {
       sb1 = state->l_b1;
       sb2 = state->l_b2;
       sbL = state->l_bL;
-
-      ledLx = state->l_x;
-      ledB1 = 0x00;
-      ledB2 = state->b2_org;
-      ledBL = state->bL_org;
+      SubCoreApp::getInstance().updateLedState(state);
     }
 
     // 最終的な値をセット (ハンドル)

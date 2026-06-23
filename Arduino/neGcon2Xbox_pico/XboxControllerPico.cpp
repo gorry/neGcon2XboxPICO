@@ -422,6 +422,35 @@ bool xboxcontroller_send_report(void) {
 // =========================================================================
 // USB MSC (Mass Storage Class) コールバック実装と再接続処理
 // =========================================================================
+
+/// <summary>
+/// ファイルシステムの開始物理アドレスを取得します。
+/// </summary>
+/// <returns>開始物理アドレス</returns>
+uint32_t get_fs_start_address(void) {
+  uint32_t start = (uint32_t)&_FS_start;
+  if (start < 0x10000000) start += 0x10000000;
+  return start;
+}
+
+/// <summary>
+/// ファイルシステムの終了物理アドレスを取得します。
+/// </summary>
+/// <returns>終了物理アドレス</returns>
+uint32_t get_fs_end_address(void) {
+  uint32_t end = (uint32_t)&_FS_end;
+  if (end < 0x10000000) end += 0x10000000;
+  return end;
+}
+
+/// <summary>
+/// ファイルシステムのサイズ（バイト）を取得します。
+/// </summary>
+/// <returns>ファイルシステムサイズ（バイト）</returns>
+uint32_t get_fs_size(void) {
+  return get_fs_end_address() - get_fs_start_address();
+}
+
 extern "C" {
 
 /// <summary>
@@ -480,33 +509,6 @@ void tud_msc_inquiry_cb(uint8_t lun, uint8_t vendor_id[8], uint8_t product_id[16
   memcpy(product_rev, rev, tu_min32(strlen(rev), 4));
 }
 
-/// <summary>
-/// ファイルシステムの開始物理アドレスを取得します。
-/// </summary>
-/// <returns>開始物理アドレス</returns>
-uint32_t get_fs_start_address(void) {
-  uint32_t start = (uint32_t)&_FS_start;
-  if (start < 0x10000000) start += 0x10000000;
-  return start;
-}
-
-/// <summary>
-/// ファイルシステムの終了物理アドレスを取得します。
-/// </summary>
-/// <returns>終了物理アドレス</returns>
-uint32_t get_fs_end_address(void) {
-  uint32_t end = (uint32_t)&_FS_end;
-  if (end < 0x10000000) end += 0x10000000;
-  return end;
-}
-
-/// <summary>
-/// ファイルシステムのサイズ（バイト）を取得します。
-/// </summary>
-/// <returns>ファイルシステムサイズ（バイト）</returns>
-uint32_t get_fs_size(void) {
-  return get_fs_end_address() - get_fs_start_address();
-}
 
 /// <summary>
 /// メディア容量情報を返却するコールバック

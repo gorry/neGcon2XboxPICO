@@ -55,124 +55,171 @@ struct ConfigParams {
   byte analogLxMax;
 };
 
-// グローバル設定パラメータの実体参照
-extern ConfigParams config;
-
 /// <summary>
-/// 設定パラメータを使って CONFIG.INI 形式のデータを指定した出力先に書き出します。
+/// 設定パラメータとEEPROM/ファイルシステム間のやり取りを管理するクラス
 /// </summary>
-/// <param name="out">出力先（FileなどのPrintインターフェース）</param>
-/// <param name="config">設定パラメータ構造体</param>
-void writeConfigIni(Print& out, const ConfigParams& config);
+class ConfigManager {
+private:
+  ConfigParams _params;
 
-/// <summary>
-/// CONFIG.INI ファイルまたは EEPROM から設定パラメータをロードします。
-/// </summary>
-void loadConfig();
+  /// <summary>
+  /// EEPROMが有効にフォーマットされているか確認します。
+  /// </summary>
+  /// <returns>有効な設定データが存在すれば true、存在しなければ false</returns>
+  bool eepromCheck();
 
-/// <summary>
-/// 現在の設定パラメータを /CONFIG.INI ファイルへ書き出し保存します。
-/// </summary>
-void saveConfig(byte currentStickMode);
+  /// <summary>
+  /// EEPROMの初期設定と全領域のクリアを行います。
+  /// </summary>
+  void eepromFormat();
 
-/// <summary>
-/// EEPROMの設定値を CONFIG.INI へ移行するか、またはテンプレートから初期生成します。
-/// </summary>
-void migrateOrInitConfig();
+  /// <summary>
+  /// neGconのアナログLT感度カーブの設定値を復元します。
+  /// </summary>
+  /// <returns>復元されたカーブのインデックス (0-3)</returns>
+  byte restoreNegLtCurve();
 
-/// <summary>
-/// EEPROMが有効にフォーマットされているか確認します。
-/// </summary>
-/// <returns>有効な設定データが存在すれば true、存在しなければ false</returns>
-bool eepromCheck();
+  /// <summary>
+  /// neGconのアナログRT感度カーブの設定値を復元します。
+  /// </summary>
+  /// <returns>復元されたカーブのインデックス (0-3)</returns>
+  byte restoreNegRtCurve();
 
-/// <summary>
-/// EEPROMの初期設定と全領域のクリアを行います。
-/// </summary>
-void eepromFormat();
+  /// <summary>
+  /// neGconハンドル（ひねり）の最大キャリブレーション値を復元します。
+  /// </summary>
+  /// <returns>復元された最大キャリブレーション値 (0x80-255)</returns>
+  byte restoreNegDegMax();
 
-/// <summary>
-/// neGconのアナログLT感度カーブの設定値を復元します。
-/// </summary>
-/// <returns>復元されたカーブのインデックス (0-3)</returns>
-byte restoreNegLtCurve();
+  /// <summary>
+  /// Jogconダイヤルの最大回転キャリブレーション値を復元します。
+  /// </summary>
+  /// <returns>復元された最大キャリブレーション値 (8-500)</returns>
+  short restorejogMax();
 
-/// <summary>
-/// neGconのアナログRT感度カーブの設定値を復元します。
-/// </summary>
-/// <returns>復元されたカーブのインデックス (0-3)</returns>
-byte restoreNegRtCurve();
+  /// <summary>
+  /// 通常アナログスティックの最大キャリブレーション値を復元します。
+  /// </summary>
+  /// <returns>復元された最大キャリブレーション値 (128-255)</returns>
+  byte restoreAnaDegMax();
 
-/// <summary>
-/// neGconハンドル（ひねり）の最大キャリブレーション値を復元します。
-/// </summary>
-/// <returns>復元された最大キャリブレーション値 (0x80-255)</returns>
-byte restoreNegDegMax();
+  /// <summary>
+  /// コントローラーのボタン配置モード設定を復元します。
+  /// </summary>
+  /// <returns>復元されたモードインデックス (MODE_STD ~ AIRCON22)</returns>
+  byte restoreNegStickMode();
 
-/// <summary>
-/// Jogconダイヤルの最大回転キャリブレーション値を復元します。
-/// </summary>
-/// <returns>復元された最大キャリブレーション値 (8-500)</returns>
-short restorejogMax();
+  /// <summary>
+  /// neGconハンドル（ひねり）の遊び削減値を復元します。
+  /// </summary>
+  /// <returns>復元された遊び削減値 (0-32)</returns>
+  byte restoreNegReduceHandlePlay();
 
-/// <summary>
-/// 通常アナログスティックの最大キャリブレーション値を復元します。
-/// </summary>
-/// <returns>復元された最大キャリブレーション値 (128-255)</returns>
-byte restoreAnaDegMax();
+  /// <summary>
+  /// 設定パラメータを使って CONFIG.INI 形式のデータを指定した出力先に書き出します。
+  /// </summary>
+  /// <param name="out">出力先（FileなどのPrintインターフェース）</param>
+  /// <param name="config">設定パラメータ構造体</param>
+  void writeConfigIni(Print& out, const ConfigParams& cfg);
 
-/// <summary>
-/// コントローラーのボタン配置モード設定を復元します。
-/// </summary>
-/// <returns>復元されたモードインデックス (MODE_STD ~ AIRCON22)</returns>
-byte restoreNegStickMode();
+public:
+  /// <summary>
+  /// コンストラクタ。デフォルト設定値でパラメータを初期化します。
+  /// </summary>
+  ConfigManager();
 
-/// <summary>
-/// neGconハンドル（ひねり）の遊び削減値を復元します。
-/// </summary>
-/// <returns>復元された遊び削減値 (0-32)</returns>
-byte restoreNegReduceHandlePlay();
+  /// <summary>
+  /// シングルトンインスタンスの取得
+  /// </summary>
+  /// <returns>ConfigManagerの参照</returns>
+  static ConfigManager& getInstance() {
+    static ConfigManager instance;
+    return instance;
+  }
 
-/// <summary>
-/// アナログスティックの最大キャリブレーション値を保存します。
-/// </summary>
-/// <param name="maxVal">設定する最大キャリブレーション値 (128-255)</param>
-/// <param name="currentStickMode">現在のスティックモード</param>
-void saveAnalogLxMax(byte maxVal, byte currentStickMode);
+  /// <summary>
+  /// 現在の設定パラメータ構造体の参照を取得します。
+  /// </summary>
+  /// <returns>設定パラメータ構造体への参照</returns>
+  ConfigParams& get() { return _params; }
 
-/// <summary>
-/// Jogconダイヤルの最大回転位置キャリブレーション値を保存します。
-/// </summary>
-/// <param name="maxVal">設定する最大キャリブレーション値 (8-500)</param>
-/// <param name="currentStickMode">現在のスティックモード</param>
-void saveJogconDialMax(short maxVal, byte currentStickMode);
+  /// <summary>
+  /// 現在の設定パラメータ構造体の読み取り専用参照を取得します。
+  /// </summary>
+  /// <returns>設定パラメータ構造体への定数参照</returns>
+  const ConfigParams& get() const { return _params; }
 
-/// <summary>
-/// neGconのアナログRT感度カーブを保存します。
-/// </summary>
-/// <param name="curveVal">設定するカーブ種類 (0-3)</param>
-/// <param name="currentStickMode">現在のスティックモード</param>
-void saveNegRtCurve(byte curveVal, byte currentStickMode);
+  /// <summary>
+  /// CONFIG.INI ファイルまたは EEPROM から設定パラメータをロードします。
+  /// </summary>
+  void load();
 
-/// <summary>
-/// neGconのアナログLT感度カーブを保存します。
-/// </summary>
-/// <param name="curveVal">設定するカーブ種類 (0-3)</param>
-/// <param name="currentStickMode">現在のスティックモード</param>
-void saveNegLtCurve(byte curveVal, byte currentStickMode);
+  /// <summary>
+  /// 現在の設定パラメータを /CONFIG.INI ファイルへ書き出し保存します。
+  /// </summary>
+  /// <param name="currentStickMode">現在のスティックモード</param>
+  void save(byte currentStickMode);
 
-/// <summary>
-/// neGconの遊び削減値を保存します。
-/// </summary>
-/// <param name="playVal">設定する遊び削減値 (0-32)</param>
-/// <param name="currentStickMode">現在のスティックモード</param>
-void saveNegReduceHandlePlay(byte playVal, byte currentStickMode);
+  /// <summary>
+  /// EEPROMの設定値を CONFIG.INI へ移行するか、またはテンプレートから初期生成します。
+  /// </summary>
+  void migrateOrInit();
 
-/// <summary>
-/// neGconの最大ねじり角キャリブレーション値を保存します。
-/// </summary>
-/// <param name="maxVal">設定する最大ねじり角キャリブレーション値 (1-255)</param>
-/// <param name="currentStickMode">現在のスティックモード</param>
-void saveNegTwistMax(byte maxVal, byte currentStickMode);
+  /// <summary>
+  /// アナログスティックの最大キャリブレーション値を保存します。
+  /// </summary>
+  /// <param name="maxVal">設定する最大キャリブレーション値 (128-255)</param>
+  /// <param name="currentStickMode">現在のスティックモード</param>
+  void saveAnalogLxMax(byte maxVal, byte currentStickMode);
+
+  /// <summary>
+  /// Jogconダイヤルの最大回転位置キャリブレーション値を保存します。
+  /// </summary>
+  /// <param name="maxVal">設定する最大キャリブレーション値 (8-500)</param>
+  /// <param name="currentStickMode">現在のスティックモード</param>
+  void saveJogconDialMax(short maxVal, byte currentStickMode);
+
+  /// <summary>
+  /// neGconのアナログRT感度カーブを保存します。
+  /// </summary>
+  /// <param name="curveVal">設定するカーブ種類 (0-3)</param>
+  /// <param name="currentStickMode">現在のスティックモード</param>
+  void saveNegRtCurve(byte curveVal, byte currentStickMode);
+
+  /// <summary>
+  /// neGconのアナログLT感度カーブを保存します。
+  /// </summary>
+  /// <param name="curveVal">設定するカーブ種類 (0-3)</param>
+  /// <param name="currentStickMode">現在のスティックモード</param>
+  void saveNegLtCurve(byte curveVal, byte currentStickMode);
+
+  /// <summary>
+  /// neGconの遊び削減値を保存します。
+  /// </summary>
+  /// <param name="playVal">設定する遊び削減値 (0-32)</param>
+  /// <param name="currentStickMode">現在のスティックモード</param>
+  void saveNegReduceHandlePlay(byte playVal, byte currentStickMode);
+
+  /// <summary>
+  /// neGconの最大ねじり角キャリブレーション値を保存します。
+  /// </summary>
+  /// <param name="maxVal">設定する最大ねじり角キャリブレーション値 (1-255)</param>
+  /// <param name="currentStickMode">現在のスティックモード</param>
+  void saveNegTwistMax(byte maxVal, byte currentStickMode);
+};
+
+// 既存コードとの互換性確保のためのマクロ定義
+#define config (ConfigManager::getInstance().get())
+
+// グローバル関数ラッパー（インライン転送）
+inline void loadConfig() { ConfigManager::getInstance().load(); }
+inline void saveConfig(byte currentStickMode) { ConfigManager::getInstance().save(currentStickMode); }
+inline void migrateOrInitConfig() { ConfigManager::getInstance().migrateOrInit(); }
+inline void saveAnalogLxMax(byte maxVal, byte currentStickMode) { ConfigManager::getInstance().saveAnalogLxMax(maxVal, currentStickMode); }
+inline void saveJogconDialMax(short maxVal, byte currentStickMode) { ConfigManager::getInstance().saveJogconDialMax(maxVal, currentStickMode); }
+inline void saveNegRtCurve(byte curveVal, byte currentStickMode) { ConfigManager::getInstance().saveNegRtCurve(curveVal, currentStickMode); }
+inline void saveNegLtCurve(byte curveVal, byte currentStickMode) { ConfigManager::getInstance().saveNegLtCurve(curveVal, currentStickMode); }
+inline void saveNegReduceHandlePlay(byte playVal, byte currentStickMode) { ConfigManager::getInstance().saveNegReduceHandlePlay(playVal, currentStickMode); }
+inline void saveNegTwistMax(byte maxVal, byte currentStickMode) { ConfigManager::getInstance().saveNegTwistMax(maxVal, currentStickMode); }
 
 #endif // CONFIG_H

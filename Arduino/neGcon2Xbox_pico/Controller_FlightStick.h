@@ -2,5 +2,13 @@
 
 #include "Controller.h"
 
-// フライトスティック処理関数の宣言
-void process_flightstick(ControllerState *state);
+/// <summary>
+/// FlightStick (アナログジョイスティックなど) の処理クラス
+/// </summary>
+class FlightStickController : public Controller {
+private:
+  byte slx, sly, srx, sry;
+public:
+  FlightStickController() : slx(0), sly(0), srx(0), sry(0) {}
+  void process(ControllerState *state) override;
+};

@@ -3,15 +3,33 @@
 #include "Config.h"
 #include "Controller.h"
 
+SubCoreApp::SubCoreApp()
+  : _pixels(NUMPIXELS, NEOPIX, NEO_GRB + NEO_KHZ800),
+    _ledLx(0), _ledLy(0), _ledRx(0), _ledRy(0), _ledB1(0), _ledB2(0), _ledBL(0),
+    _ledFlashCount(0), _heartbeatNum(0), _heartbeatFlag(true), _heartbeatSpeed(32) {}
+
+void SubCoreApp::updateLedState(const ControllerState* state) {
+  _ledLx = state->l_x;
+  _ledLy = state->l_y;
+  _ledRx = state->r_x;
+  _ledRy = state->r_y;
+  _ledB1 = state->l_b1;
+  _ledB2 = state->l_b2;
+  _ledBL = state->l_bL;
+}
+
+void SubCoreApp::flashLed(int count) {
+  _ledFlashCount = count;
+}
+
+
 // LEDまわりの変数の実体定義
-Adafruit_NeoPixel pixels(NUMPIXELS, NEOPIX, NEO_GRB + NEO_KHZ800);
-byte ledLx = 0, ledLy = 0, ledRx = 0, ledRy = 0, ledB1 = 0, ledB2 = 0, ledBL = 0;
-volatile int ledFlashCount = 0;
+
 
 /// <summary>
 /// Core 1 (サブコア) の初期化処理
 /// </summary>
-void setup1() {
+void SubCoreApp::begin() {
   // Core 0 (メインコア) のセットアップが完了するまで待機します
   while (!setup_done) {
     delay(50);
@@ -21,7 +39,7 @@ void setup1() {
 /// <summary>
 /// Core 1 (サブコア) のメインループ
 /// </summary>
-void loop1() {
+void SubCoreApp::update() {
   // Flashへの書き込み中は、Core 1 の動作（NeoPixelアクセスなど）によるバス競合を防止するため一時停止します
   if (flash_busy) {
     delay(100);
@@ -33,11 +51,11 @@ void loop1() {
     // アクセスランプ処理（最後の読み書きから100ms未満は優先表示）
     if (msc_access_type != 0 && (millis() - last_msc_access_time < 100)) {
       if (msc_access_type == 1) {
-        pixels.setPixelColor(0, pixels.Color(0, 0, 255)); // 読み込み：青
+        _pixels.setPixelColor(0, _pixels.Color(0, 0, 255)); // 読み込み：青
       } else {
-        pixels.setPixelColor(0, pixels.Color(255, 0, 0)); // 書き込み：赤
+        _pixels.setPixelColor(0, _pixels.Color(255, 0, 0)); // 書き込み：赤
       }
-      pixels.show();
+      _pixels.show();
       delay(10);
       return;
     }
@@ -53,33 +71,31 @@ void loop1() {
       raw_brightness = ((period - t) * 127) / half_period;
     }
     byte brightness = raw_brightness; // 0〜127の範囲でなだらかに明滅
-    pixels.setPixelColor(0, pixels.Color(0, brightness, brightness));
-    pixels.show();
+    _pixels.setPixelColor(0, _pixels.Color(0, brightness, brightness));
+    _pixels.show();
     delay(20);
     return;
   }
 
-  static byte heartbeat_num = 0;
-  static bool heartbeat_flag = true;
-  const byte heartbeat_speed = 32;
+  
 
   // 設定変更時の LED 明滅通知処理
-  if (ledFlashCount > 0) {
+  if (_ledFlashCount > 0) {
     byte r_val = (config.negReduceHandlePlay == 32) ? 255 : (config.negReduceHandlePlay * 8);
-    byte g_val = ledLx;
-    byte b_val = heartbeat_num;
+    byte g_val = _ledLx;
+    byte b_val = _heartbeatNum;
 
     // 点灯 (0.1秒)
-    pixels.setPixelColor(0, pixels.Color(r_val, g_val, b_val));
-    pixels.show();
+    _pixels.setPixelColor(0, _pixels.Color(r_val, g_val, b_val));
+    _pixels.show();
     delay(100);
 
     // 消灯 (0.1秒)
-    pixels.setPixelColor(0, pixels.Color(0, 0, 0));
-    pixels.show();
+    _pixels.setPixelColor(0, _pixels.Color(0, 0, 0));
+    _pixels.show();
     delay(100);
 
-    ledFlashCount--;
+    _ledFlashCount--;
     return;
   }
 
@@ -87,66 +103,80 @@ void loop1() {
   switch (stickMode) {
     case MODE_STD:
       // 青色ベース（標準モード、無入力時は青）
-      pixels.setPixelColor(0, pixels.Color(ledRx / 4, ledLx / 4, 0x80 - ledB1 - ledB2 + ledBL / 2));
-      pixels.show();
+      _pixels.setPixelColor(0, _pixels.Color(_ledRx / 4, _ledLx / 4, 0x80 - _ledB1 - _ledB2 + _ledBL / 2));
+      _pixels.show();
       break;
 
     case MODE_SWAPAB:
       // 緑色ベース（A/Bスワップ、無入力時は緑）
-      pixels.setPixelColor(0, pixels.Color(ledRx / 4, 0x80 - ledB1 + ledBL / 2, ledLx / 4));
-      pixels.show();
+      _pixels.setPixelColor(0, _pixels.Color(_ledRx / 4, 0x80 - _ledB1 + _ledBL / 2, _ledLx / 4));
+      _pixels.show();
       break;
 
     case MODE_SWAPLTRT:
       // 赤色ベース（LT/RTスワップ、無入力時は赤）
-      pixels.setPixelColor(0, pixels.Color(0x80 - ledB2 + ledBL / 2, ledLx / 4, ledLy / 4));
-      pixels.show();
+      _pixels.setPixelColor(0, _pixels.Color(0x80 - _ledB2 + _ledBL / 2, _ledLx / 4, _ledLy / 4));
+      _pixels.show();
       break;
 
     case MODE_SWAPAB_SWAPLTRT:
       // 紫・マゼンタベース (両方スワップ、無入力時は水色)
-      pixels.setPixelColor(0, pixels.Color(0, 0x80 - ledB1 + ledB2, ledLx / 2 + ledBL / 2));
-      pixels.show();
+      _pixels.setPixelColor(0, _pixels.Color(0, 0x80 - _ledB1 + _ledB2, _ledLx / 2 + _ledBL / 2));
+      _pixels.show();
       break;
 
     // フライトコントローラ接続時の点灯パターン
     case MODE_AIRCON22:
-      pixels.setPixelColor(0, pixels.Color(ledRy / 4, ledLx / 8, ledLy / 8 + 0x40));
-      pixels.show();
+      _pixels.setPixelColor(0, _pixels.Color(_ledRy / 4, _ledLx / 8, _ledLy / 8 + 0x40));
+      _pixels.show();
       break;
 
     case MODE_SETTING_NEG:
       {
-        // heartbeat_num で B値（青）を明滅、ねじり値でG値（緑）を明滅、config.negReduceHandlePlay に比例した固定輝度で R値（赤）を点灯
+        // _heartbeatNum で B値（青）を明滅、ねじり値でG値（緑）を明滅、config.negReduceHandlePlay に比例した固定輝度で R値（赤）を点灯
         byte r_val = (config.negReduceHandlePlay == 32) ? 255 : (config.negReduceHandlePlay * 8);
-        byte g_val = ledLx;
-        pixels.setPixelColor(0, pixels.Color(r_val, g_val, heartbeat_num));
-        pixels.show();
+        byte g_val = _ledLx;
+        _pixels.setPixelColor(0, _pixels.Color(r_val, g_val, _heartbeatNum));
+        _pixels.show();
       }
       break;
 
     default:
-      pixels.clear();
-      pixels.show();
+      _pixels.clear();
+      _pixels.show();
       break;
   }
 
   // LEDの点滅処理数値計算 (delay(50)にあわせてステップ幅を8に調整し、約3秒周期で明滅)
-  if (heartbeat_flag) {
-    if (heartbeat_num >= 255 - heartbeat_speed) {
-      heartbeat_num = 255;
-      heartbeat_flag = false;
+  if (_heartbeatFlag) {
+    if (_heartbeatNum >= 255 - _heartbeatSpeed) {
+      _heartbeatNum = 255;
+      _heartbeatFlag = false;
     } else {
-      heartbeat_num += heartbeat_speed;
+      _heartbeatNum += _heartbeatSpeed;
     }
   } else {
-    if (heartbeat_num <= heartbeat_speed) {
-      heartbeat_num = 0;
-      heartbeat_flag = true;
+    if (_heartbeatNum <= _heartbeatSpeed) {
+      _heartbeatNum = 0;
+      _heartbeatFlag = true;
     } else {
-      heartbeat_num -= heartbeat_speed;
+      _heartbeatNum -= _heartbeatSpeed;
     }
   }
 
   delay(50); // Sub core の無駄な CPU 占有とバス負荷を軽減するためのウェイト
+}
+
+/// <summary>
+/// Arduinoコアから暗黙的に呼び出される Core 1 の初期化エントリポイント
+/// </summary>
+void setup1() {
+  SubCoreApp::getInstance().begin();
+}
+
+/// <summary>
+/// Arduinoコアから暗黙的に呼び出される Core 1 のメインループエントリポイント
+/// </summary>
+void loop1() {
+  SubCoreApp::getInstance().update();
 }

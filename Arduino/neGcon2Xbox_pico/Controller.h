@@ -38,13 +38,41 @@ enum MetaKeyState {
 
 
 
-// 共通下請け関数の宣言
-byte applyAnalogCurve(byte value, byte curveType);
-int absoluteXY(byte lx);
-short jogcon_abs_val(short x);
-int adjustXY(byte lx, byte max);
-void keyConvert_psx2xbox_ex(uint16_t buttons);
-void keyConvert_psx2xbox();
+/// <summary>
+/// すべてのコントローラ制御クラスの基底となる抽象クラス
+/// </summary>
+class Controller {
+protected:
+  // 共通の補正・変換ヘルパーメソッド
+  byte applyAnalogCurve(byte value, byte curveType);
+  int absoluteXY(byte lx);
+  short jogcon_abs_val(short x);
+  int adjustXY(byte lx, byte max);
+  void keyConvert_psx2xbox_ex(uint16_t buttons);
+  void keyConvert_psx2xbox();
 
-// デフォルトコントローラ処理の宣言
-void process_default_controller(ControllerState *state);
+public:
+  virtual ~Controller() {}
+  
+  /// <summary>
+  /// コントローラの入力データ処理を実行します。
+  /// </summary>
+  /// <param name="state">コントローラ状態へのポインタ</param>
+  virtual void process(ControllerState* state) = 0;
+};
+
+/// <summary>
+/// デフォルトコントローラ（デジタルまたはその他の未対応機器）の処理クラス
+/// </summary>
+class DefaultController : public Controller {
+public:
+  void process(ControllerState* state) override;
+};
+
+/// <summary>
+/// プロトコルに応じて適切なコントローラーオブジェクトを返却するファクトリクラス
+/// </summary>
+class ControllerFactory {
+public:
+  static Controller* getController(PsxControllerProtocol protocol);
+};

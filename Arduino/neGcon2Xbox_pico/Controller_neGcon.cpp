@@ -1,5 +1,6 @@
 #include "Controller_neGcon.h"
 #include "neGcon2Xbox_pico.h"
+#include "SubCore.h"
 
 // neGcon アナログ値補正用定数
 #define NEG_CALIB 1.0
@@ -9,13 +10,8 @@
 /// neGcon の入力処理
 /// </summary>
 /// <param name="state">コントローラ状態へのポインタ</param>
-void process_negcon(ControllerState *state) {
+void NeGconController::process(ControllerState *state) {
   // ファイルスコープに静的な入力キャッシュを保持 (グローバル変数の削減)
-  static byte slx = 0;
-  static byte sb1 = 0;
-  static byte sb2 = 0;
-  static byte sbL = 0;
-
   // スワップ（STD, SWAPAB, SWAPLTRT, SWAPAB_SWAPLTRT）を考慮したデジタルマッピング
   if (stickMode == MODE_STD || stickMode == MODE_SWAPAB || stickMode == MODE_SWAPLTRT || stickMode == MODE_SWAPAB_SWAPLTRT) {
     uint16_t buttons = psx.getButtonWord();
@@ -176,11 +172,7 @@ void process_negcon(ControllerState *state) {
       sb1 = state->l_b1;
       sb2 = state->l_b2;
       sbL = state->l_bL;
-
-      ledLx = state->l_x;
-      ledB1 = state->b1_org;
-      ledB2 = state->b2_org;
-      ledBL = state->bL_org;
+      SubCoreApp::getInstance().updateLedState(state);
     }
 
     // ねじりハンドル角度をXInputのアナログ軸に割り当て
@@ -206,20 +198,18 @@ void process_negcon(ControllerState *state) {
     // 設定モード時のパラメータ変更処理
     if (state->is_setting) {
       uint16_t buttons = psx.getButtonWord();
-      static uint16_t lastButtons = 0;
-
       // L1ボタン（Lボタン）押下でRTアナログ感度カーブ（0:線形〜3:二次関数曲線）をローテーション変更しEEPROMに保存
       if ((buttons & PSB_L1) && !(lastButtons & PSB_L1)) {
         saveNegRtCurve((config.negRtCurve + 1) % 4, stickMode);
         Serial.printf("[%lu] NEG_ANALOG_RT_CURVE: %d\n", millis(), config.negRtCurve);
-        ledFlashCount = config.negRtCurve + 1; // 変更後のカーブ種類をLED明滅回数で通知
+        SubCoreApp::getInstance().flashLed(config.negRtCurve + 1); // 変更後のカーブ種類をLED明滅回数で通知
       }
 
       // SQUAREボタン（IIボタン）押下でLTアナログ感度カーブをローテーション変更しEEPROMに保存
       if ((buttons & PSB_SQUARE) && !(lastButtons & PSB_SQUARE)) {
         saveNegLtCurve((config.negLtCurve + 1) % 4, stickMode);
         Serial.printf("[%lu] NEG_ANALOG_LT_CURVE: %d\n", millis(), config.negLtCurve);
-        ledFlashCount = config.negLtCurve + 1; // 変更後のカーブ種類をLED明滅回数で通知
+        SubCoreApp::getInstance().flashLed(config.negLtCurve + 1); // 変更後のカーブ種類をLED明滅回数で通知
       }
 
       // 十字キー上ボタンでハンドルの遊び削減値（デッドゾーンの詰め量）を増加（感度を高める）しEEPROM保存
